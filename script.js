@@ -113,12 +113,30 @@ const commands = {
     awating();
     // return result;
   },
+  date: (args, options) => {
+    const now = new Date();
+    const formattedDate = now.toLocaleString('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    print("")
+    print(`${formattedDate}`);
+    return " ";
+  },
   gh: () => location.href = "https://github.com",
   help: () => {
-    print("Available commands:");
-    print(" - google [query]: Search Google for the specified query.");
-    print(" - youtube [query]: Search YouTube for the specified query.");
+    print("Commands Available:");
+    print(" - google <query> [-b]: Search Google for the specified query.");
+    print(" - youtube <query> [-b]: Search YouTube for the specified query.");
+    print(" - bing <query> [-b]: Search Bing for the specified query.");
     print(" - ping <host> [-t] [-n <count>]: Ping a host, with optional continuous or count options.");
+    print(" - goto <url> [-b]: Navigate to the specified URL, with optional new tab.");
+    print(" - date: Show the current date and time.");
     print(" - gh: Go to GitHub.");
     print(" - help: Show this help message.");
     return " ";
@@ -190,7 +208,9 @@ async function ping_func(url, options) {
       await p.ping(url, (error, latency) => {
         if (error) {
           console.error(`Failed to ping ${url}:`, error);
-          print(`Failed to ping ${url}: ${error}`);
+          print(`Failed to ping ${url}: ${error}`, "error");
+          commanding = false; // Reset command running state
+          done(); // Restore prompt
           return;
         }
       }
@@ -212,7 +232,7 @@ async function ping_func(url, options) {
 
 
 // MODIFIED print function
-function print(text) {
+function print(text, type="info") {
   const lineWidth = output.clientWidth;
   const charWidth = CHARACTER_WIDTH;
 
@@ -252,7 +272,7 @@ function print(text) {
   const filledText = " ".repeat(numSpaces);
 
   const lineDiv = document.createElement('div');
-  lineDiv.className = 'output-line output-line-powershell';
+  lineDiv.className = `output-line output-line-powershell output-${type}`;
   lineDiv.setAttribute('data-raw-text', textStr); // Store original text
   lineDiv.textContent = textStr + filledText;   // Use textContent for safety if text is not HTML
 
@@ -284,7 +304,8 @@ function processCommand(input) {
     }
     // If action is async (like ping), it should handle its own "done" state.
   } else {
-    print(`Unknown command: '${command}' (try 'help')`);
+    print(`Unknown command: '${command}' (try 'help')`, "error");
+    print("");
   }
 }
 
@@ -386,6 +407,11 @@ document.body.addEventListener("keyup", e => {
   }
 });
 
+// document.body.addEventListener("click", e => {
+//   // Ensure the body is focused to capture keydown events
+//   e.preventDefault();
+// }
+// );
 
 // NEW function to update lines on resize
 function updateLinesOnResize() {
@@ -455,8 +481,25 @@ var Ping = function(opt) {
     this.logError = this.opt.logError || false;
 };
 
+function detectBrowser() {
+    var userAgent = navigator.userAgent;
+    if (userAgent.includes("Firefox/")) {
+    return "Firefox";
+  } else if (userAgent.includes("Edg/")) {
+    return "Edge";
+  } else if (userAgent.includes("Chrome/") && !userAgent.includes("Edg/") && !userAgent.includes("OPR/")) {
+    return "Chrome";
+  } else if (userAgent.includes("Safari/") && !userAgent.includes("Chrome/")) {
+    return "Safari";
+  } else if (userAgent.includes("OPR/") || userAgent.includes("Opera")) {
+    return "Opera";
+  } else {
+    return "Unknown browser";
+  }
+}
+
 function welcomeMsg() {
-    print("Terminal Startup");
+    print(`Terminal Startup - ${detectBrowser()}`);
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
