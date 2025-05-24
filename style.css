@@ -1,0 +1,85 @@
+body {
+  margin: 0;
+  background-color: #000;
+  color: rgb(255, 255, 255);
+  font-family: monospace;
+  font-size: 1rem;
+}
+
+.terminal {
+  padding: 1rem;
+  outline: none;
+}
+
+.typed-container {
+  display: inline-block;
+  /* white-space: pre-wrap; */
+  word-break: break-word;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+#typedText {
+  white-space: pre-wrap;       /* 保留空格并自动换行 */
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+
+.output-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.output-line-powershell {
+  /* padding: 0.5rem 0; */
+  line-height: 1.5;
+  font-size: 16px;
+  font-family: Consolas, monospace;
+}
+
+.input-line {
+  display: flex;
+  align-items: center;
+  /* flex-wrap: wrap; */
+  cursor: default;
+  line-height: 1.5;
+}
+
+.prompt {
+  margin-right: 0.55rem;
+  align-self: flex-start;
+}
+
+.cursor {
+  display: inline-block;
+  width: 1ch;
+  background-color: #0f0;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    background-color: transparent;
+  }
+}
+
+#output {
+  /* margin-bottom: 0.5rem; */
+  line-height: 1.5;
+  cursor: default;
+}
+
+/* Change the color of the selected text */
+::selection {
+  background-color: #ffffff; /* Yellow background */
+  color: #000000; /* Black text */
+}
+
+/* For better browser compatibility */
+::-moz-selection {
+  background-color: #ffffff; /* Yellow background for Firefox */
+  color: #000000; /* Black text for Firefox */
+}
