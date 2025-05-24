@@ -41,6 +41,12 @@ body {
   font-family: Consolas, monospace;
 }
 
+.highlighted-char {
+  background-color: #ffffff; /* Matches ::selection background */
+  color: #000000;           /* Matches ::selection text color */
+  /* display: inline-block; */ 
+}
+
 .output-info {
   color: #fff; /* Green text for info */
 }

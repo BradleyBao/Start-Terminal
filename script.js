@@ -128,6 +128,9 @@ const commands = {
     print(`${formattedDate}`);
     return " ";
   },
+  clear: () => {
+    clearOutput();
+  },
   gh: () => location.href = "https://github.com",
   help: () => {
     print("Commands Available:");
@@ -322,6 +325,14 @@ function done() {
   document.body.focus(); // Or focus a specific input element if you change structure
 }
 
+function clearOutput() {
+  output.innerHTML = ""; // Clear all output lines
+  typedText.textContent = ""; // Clear typed text
+  buffer = ""; // Reset buffer
+  previousCommands.length = 0; // Clear command history
+  previousCommandIndex = 0; // Reset command index
+  done(); // Restore prompt state
+}
 
 // --- Keyboard Listeners (largely unchanged, ensure buffer/typedText are handled) ---
 document.body.addEventListener("keydown", e => {
@@ -350,6 +361,14 @@ document.body.addEventListener("keydown", e => {
     }
     typedText.textContent = buffer;
     e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowLeft") {
+    
+  }
+  else if (e.key === "ArrowRight") {
+    // Handle right arrow if needed, e.g., for moving cursor in input
+    // This is not implemented in the original code, so leaving it empty
     return;
   }
 
