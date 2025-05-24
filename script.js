@@ -128,7 +128,7 @@ const commands = {
     print(`${formattedDate}`);
     return " ";
   },
-  clear: () => {
+  clear: (args, options) => {
     clearOutput();
   },
   gh: () => location.href = "https://github.com",
@@ -140,7 +140,7 @@ const commands = {
     print(" - ping <host> [-t] [-n <count>]: Ping a host, with optional continuous or count options.");
     print(" - goto <url> [-b]: Navigate to the specified URL, with optional new tab.");
     print(" - date: Show the current date and time.");
-    print(" - gh: Go to GitHub.");
+    print(" - clear: Clear the terminal output.");
     print(" - help: Show this help message.");
     return " ";
   }
