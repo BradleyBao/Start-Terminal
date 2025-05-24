@@ -11,6 +11,7 @@ let buffer = "";
 const previousCommands = [];
 let previousCommandIndex = 0;
 
+
 // Function to measure character width
 function getMonospaceCharacterWidth() {
     const span = document.createElement('span');
@@ -38,23 +39,67 @@ function updateCharacterWidth() {
     CHARACTER_WIDTH = getMonospaceCharacterWidth();
 }
 
+
+
 // --- Commands Object (assumed mostly unchanged, ensure help text is plain) ---
 const commands = {
   google: (args, options) => {
-    if (args.length === 0) return "Usage: google [query]";
+    if (args.length === 0) return "Usage: google <query> [-b]";
     const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
     location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
     return true;
   },
   bing: (args, options) => {
-    if (args.length === 0) return "Usage: bing [query]";
+    if (args.length === 0) return "Usage: bing <query> [-b]";
     const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
     location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
     return true;
   },
+  goto: (args, options) => {
+    // console.log(args, options);
+    if (args.length === 0) return "Usage: goto <url> [-b]";
+    const url = args.join(" ");
+    // if target blank is needed, open in a new tab
+    
+    if (!/^https?:\/\//i.test(url)) {
+      // Add a protocol if missing
+      let rephrased_url = `https://${url}`; // Use https as default
+      // if target blank is needed, open in a new tab
+      if (options.b) {
+        rephrased_url = `https://${url}`; // Use https as default
+        window.open(rephrased_url, '_blank'); // Open in a new tab
+      }
+      else {
+        location.href = rephrased_url; // Redirect to the URL
+      }
+      return true;
+      // return "Error: URL must start with http:// or https://";
+    }
+    if (options.b) {
+      window.open(url, '_blank'); // Open in a new tab
+      return true;
+    }
+    location.href = url;
+    return true;
+  },
   youtube: (args, options) => {
-    if (args.length === 0) return "Usage: yt [query]";
+    if (args.length === 0) return "Usage: yt <query> [-b]";
     const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
     location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
     return true;
   },
@@ -93,8 +138,8 @@ function parseCommandLine(input) {
 
   // Specific Options
   const optionRequiresValue = {
-    ping: ["n"], // ping 的 -n 是带值的，其它不是
-    google: [],
+    ping: ["n"], // ping 's -n option requires a value'
+    google: [], 
     yt: [],
   };
 
@@ -409,6 +454,17 @@ var Ping = function(opt) {
     this.timeout = this.opt.timeout || 0;
     this.logError = this.opt.logError || false;
 };
+
+function welcomeMsg() {
+    print("Terminal Startup");
+    print("Author: Tian Yi, Bao");
+    print("");
+    print("Type 'help' for a list of commands.");
+    print("");
+}
+
+welcomeMsg();
+
 
 /**
  * Pings source and triggers a callback when completed.
