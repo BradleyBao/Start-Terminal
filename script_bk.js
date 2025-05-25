@@ -1,50 +1,142 @@
+// script.js
+
 const output = document.getElementById("output");
 const typedText = document.getElementById("typedText");
 const terminal = document.getElementById("terminal");
 const promptSymbol = document.getElementById("promptSymbol");
 
-var control_cmd = false; // Determine if control is pressed
-
-var commanding = false; // Determine if a command is running
-// Import the Ping class from ping.js
-// import {Ping} from "./ping.js";
-
+var control_cmd = false;
+var commanding = false;
 let buffer = "";
-
 const previousCommands = [];
-let previousCommandIndex = 0; // Index for navigating through previous commands
+let previousCommandIndex = 0;
 
+let cursorPosition = 0; // Tracks the cursor position within the buffer
+let isComposing = false; // For IME input
+
+
+// Function to measure character width
 function getMonospaceCharacterWidth() {
     const span = document.createElement('span');
-    span.textContent = ' '; // Use a space character for measuring space width
-    // Apply the same styles as your output lines
-    span.style.fontFamily = 'Consolas, monospace'; // From .output-line-powershell CSS
-    span.style.fontSize = '16px';                 // From .output-line-powershell CSS
+    span.textContent = ' '; // Use a space or any representative character like 'M'
+    // Apply the same styles as your output lines for accuracy
+    span.style.fontFamily = 'Consolas, monospace'; // Match .output-line-powershell CSS
+    span.style.fontSize = '16px';                 // Match .output-line-powershell CSS
     span.style.visibility = 'hidden';
     span.style.position = 'absolute';
-    document.body.appendChild(span);
+    
+    // Append to output to inherit relevant styles if 'output' is already available
+    const parentElement = document.getElementById("output") || document.body;
+    parentElement.appendChild(span);
     const width = span.getBoundingClientRect().width;
-    document.body.removeChild(span);
-    return width > 0 ? width : 8; // Fallback to a reasonable default (e.g., 8px)
+    parentElement.removeChild(span);
+    
+    return width > 0 ? width : 8; // Fallback to a reasonable default (e.g., 8px for 16px font)
 }
 
-// Cache the character width on script load
-const CHARACTER_WIDTH = getMonospaceCharacterWidth();
+// Use 'let' as it will be updated on resize/zoom
+let CHARACTER_WIDTH = getMonospaceCharacterWidth();
 
-// ---------------------------
-// 命令注册
-// ---------------------------
+// Function to update CHARACTER_WIDTH if needed (e.g., on resize/zoom)
+function updateCharacterWidth() {
+    CHARACTER_WIDTH = getMonospaceCharacterWidth();
+}
+
+
+
+// --- Commands Object (assumed mostly unchanged, ensure help text is plain) ---
 const commands = {
   google: (args, options) => {
-    if (args.length === 0) return "Usage: google [query]";
+    if (args.length === 0) return "Usage: google <query> [-b]";
     const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
     location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
     return true;
   },
-  youtube: (args, options) => {
-    if (args.length === 0) return "Usage: yt [query]";
+  bing: (args, options) => {
+    if (args.length === 0) return "Usage: bing <query> [-b]";
     const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+    return true;
+  },
+  baidu: (args, options) => {
+    if (args.length === 0) return "Usage: baidu <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
+    return true;
+  },
+  goto: (args, options) => {
+    // console.log(args, options);
+    if (args.length === 0) return "Usage: goto <url> [-b]";
+    const url = args.join(" ");
+    // if target blank is needed, open in a new tab
+    
+    if (!/^https?:\/\//i.test(url)) {
+      // Add a protocol if missing
+      let rephrased_url = `https://${url}`; // Use https as default
+      // if target blank is needed, open in a new tab
+      if (options.b) {
+        rephrased_url = `https://${url}`; // Use https as default
+        window.open(rephrased_url, '_blank'); // Open in a new tab
+      }
+      else {
+        location.href = rephrased_url; // Redirect to the URL
+      }
+      return true;
+      // return "Error: URL must start with http:// or https://";
+    }
+    if (options.b) {
+      window.open(url, '_blank'); // Open in a new tab
+      return true;
+    }
+    location.href = url;
+    return true;
+  },
+  youtube: (args, options) => {
+    if (args.length === 0) return "Usage: yt <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
     location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    return true;
+  },
+  bilibili: (args, options) => {
+    if (args.length === 0) return "Usage: bilibili <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
+    return true;
+  },
+  spotify: (args, options) => {
+    if (args.length === 0) return "Usage: spotify <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
     return true;
   },
   ping: (args, options) => {
@@ -57,13 +149,34 @@ const commands = {
     awating();
     // return result;
   },
+  date: (args, options) => {
+    const now = new Date();
+    const formattedDate = now.toLocaleString('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    print("")
+    print(`${formattedDate}`);
+    return " ";
+  },
+  clear: (args, options) => {
+    clearOutput();
+  },
   gh: () => location.href = "https://github.com",
   help: () => {
-    print("Available commands:");
-    print(" - google [query]: Search Google for the specified query.");
-    print(" - yt [query]: Search YouTube for the specified query.");
+    print("Commands Available:");
+    print(" - google <query> [-b]: Search Google for the specified query.");
+    print(" - youtube <query> [-b]: Search YouTube for the specified query.");
+    print(" - bing <query> [-b]: Search Bing for the specified query.");
     print(" - ping <host> [-t] [-n <count>]: Ping a host, with optional continuous or count options.");
-    print(" - gh: Go to GitHub.");
+    print(" - goto <url> [-b]: Navigate to the specified URL, with optional new tab.");
+    print(" - date: Show the current date and time.");
+    print(" - clear: Clear the terminal output.");
     print(" - help: Show this help message.");
     return " ";
   }
@@ -82,8 +195,8 @@ function parseCommandLine(input) {
 
   // Specific Options
   const optionRequiresValue = {
-    ping: ["n"], // ping 的 -n 是带值的，其它不是
-    google: [],
+    ping: ["n"], // ping 's -n option requires a value'
+    google: [], 
     yt: [],
   };
 
@@ -134,7 +247,9 @@ async function ping_func(url, options) {
       await p.ping(url, (error, latency) => {
         if (error) {
           console.error(`Failed to ping ${url}:`, error);
-          print(`Failed to ping ${url}: ${error}`);
+          print(`Failed to ping ${url}: ${error}`, "error");
+          commanding = false; // Reset command running state
+          done(); // Restore prompt
           return;
         }
       }
@@ -154,207 +269,344 @@ async function ping_func(url, options) {
   done();
 }
 
-// function ping_func(url, options) {
-//   const start = Date.now();
-//   const xhr = new XMLHttpRequest();
-//   xhr.open('HEAD', url, true);
-//   xhr.onload = () => {
-//     const latency = Date.now() - start;
-//     console.log(`Ping to ${url}: ${latency} ms`);
-//   };
-//   xhr.onerror = () => {
-//     console.error(`Failed to ping ${url}`);
-//   };
-//   xhr.send();
-// }
 
+// MODIFIED print function
+function print(text, type="info") {
+  const lineWidth = output.clientWidth;
+  const charWidth = CHARACTER_WIDTH;
 
-// ---------------------------
-// 命令执行器
-// ---------------------------
+  // Fallback if charWidth is not available (e.g., during initial load issues)
+  if (charWidth === 0) {
+    console.warn("Character width is zero, printing without padding.");
+    const lineDiv = document.createElement('div');
+    lineDiv.className = 'output-line output-line-powershell';
+    lineDiv.setAttribute('data-raw-text', String(text)); // Store original text
+    lineDiv.textContent = String(text); // Ensure text is string
+    output.appendChild(lineDiv);
+    window.scrollTo(0, document.body.scrollHeight);
+    return;
+  }
+  
+  const textStr = String(text); // Ensure text is a string
+  const totalTextPixelWidth = textStr.length * charWidth;
+  let numSpaces = 0;
+
+  if (totalTextPixelWidth < lineWidth) {
+    // Text is shorter than one line
+    numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
+  } else {
+    // Text is longer than or equal to one line and might wrap
+    const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
+    if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+      // Text fits exactly into N lines, or is a multiple of lineWidth
+      numSpaces = 0; // No padding needed as the last line is full
+    } else {
+      // Text wraps, and the last line has content (lastLineActualPixelWidth > 0)
+      // Or text is empty (totalTextPixelWidth = 0), then lastLineActualPixelWidth = 0
+      numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
+    }
+  }
+  
+  numSpaces = Math.max(0, numSpaces); // Ensure non-negative
+  const filledText = " ".repeat(numSpaces);
+
+  const lineDiv = document.createElement('div');
+  lineDiv.className = `output-line output-line-powershell output-${type}`;
+  lineDiv.setAttribute('data-raw-text', textStr); // Store original text
+  lineDiv.textContent = textStr + filledText;   // Use textContent for safety if text is not HTML
+
+  output.appendChild(lineDiv);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+// --- processCommand, awating, done (ensure done() re-enables input correctly) ---
 function processCommand(input) {
-  print(`$ ${input}`);
+  print(`$ ${input}`); // Echo command with padding
   const parsed = parseCommandLine(input);
-  if (!parsed) return print("Invalid command");
+  if (!parsed) {
+      print("Invalid command syntax."); // Provide more specific feedback
+      return;
+  }
 
   const { command, args, options } = parsed;
   const action = commands[command];
   
   if (action) {
     const result = action(args, options);
-    // console.log(typeof result === "boolean");
-    if (typeof result === "string") print(result);
-    else if (typeof result === "boolean" && result) {
-      // Disable the input line with id typedText
-      awating();
-      return
+    if (typeof result === "string") {
+        print(result);
+    } else if (typeof result === "boolean" && result === true) {
+      // For commands that navigate or start async ops handled by awating()
+      // awating(); // awating() should be called by async commands like ping
+    } else if (typeof result === "boolean" && result === false) {
+      print(`Command '${command}' failed execute or returned false.`);
     }
-    else if (typeof result === "boolean" && !result) {
-      print(`Command '${command}' failed.`);
-    }
+    // If action is async (like ping), it should handle its own "done" state.
   } else {
-    print(`Unknown command: '${command}' (try 'help')`);
+    print(`Unknown command: '${command}' (try 'help')`, "error");
+    print("");
   }
 }
 
 function awating() {
-  // Disable the input line with id typedText
   typedText.textContent = "";
-  promptSymbol.textContent = "";
-  // Add a loading animation or message
-  promptSymbol.style.display = "none";
+  promptSymbol.style.display = "none"; // Hide prompt symbol
 }
 
 function done() {
-  // Enable the input line with id typedText
-  promptSymbol.style.display = "inline";
-  typedText.textContent = buffer;
-  promptSymbol.textContent = "$ ";
+  promptSymbol.style.display = "inline"; // Show prompt symbol
+  promptSymbol.textContent = "$ "; // Ensure prompt symbol text is correct
+  typedText.textContent = buffer; // Restore buffer if needed, or clear
+  // Ensure cursor is visible and input is focusable again
+  document.body.focus(); // Or focus a specific input element if you change structure
 }
 
-// ---------------------------
-// 输出到终端
-// ---------------------------
-function print(text) {
-  // Use output.clientWidth for a more accurate line width
-  const lineWidth = output.clientWidth;
-  
-  // Use the dynamically calculated (or adjusted) character width
-  const charWidth = CHARACTER_WIDTH; // Or your manually adjusted value if using Option A
-
-  // Ensure charWidth is not zero to prevent division by zero
-  if (charWidth === 0) {
-    console.error("Character width is zero, cannot calculate spaces.");
-    output.innerHTML += `<div class="output-line output-line-powershell">${text}</div>`;
-    window.scrollTo(0, document.body.scrollHeight);
-    return;
-  }
-
-  const textRenderedWidth = text.length * charWidth;
-  const numSpaces = Math.floor(Math.max(0, (lineWidth - textRenderedWidth) / charWidth));
-  const filledText = " ".repeat(numSpaces);
-  
-  // The rest of your console.log for debugging can be kept or removed
-  // console.log(lineWidth, text.length, filledText.length, charWidth); 
-
-  output.innerHTML += `<div class="output-line output-line-powershell">${text}${filledText}</div>`;
-  window.scrollTo(0, document.body.scrollHeight);
+function clearOutput() {
+  output.innerHTML = ""; // Clear all output lines
+  typedText.textContent = ""; // Clear typed text
+  buffer = ""; // Reset buffer
+  previousCommands.length = 0; // Clear command history
+  previousCommandIndex = 0; // Reset command index
+  done(); // Restore prompt state
 }
 
-// ---------------------------
-// 键盘监听（仿终端）
-// —---------------------------
+// --- Keyboard Listeners (largely unchanged, ensure buffer/typedText are handled) ---
 document.body.addEventListener("keydown", e => {
-  // console.log(e.key);
   if (e.key === "Control" || e.key === "Meta") {
-    // Ignore Control and Meta keys
     control_cmd = true;
-    e.preventDefault(); // Prevent default behavior of Control and Meta keys
+    e.preventDefault();
     return;
   }
-  else if (e.key === "ArrowUp") {
-    // If the user presses ArrowUp, show the previous command
-    if (previousCommands.length > 0 && previousCommandIndex >= -previousCommands.length) {
-      // console.log(previousCommandIndex, previousCommands.at(previousCommandIndex));
+  // ... (ArrowUp, ArrowDown logic as before) ...
+  if (e.key === "ArrowUp") {
+    if (previousCommands.length > 0 && previousCommandIndex > -previousCommands.length) {
       previousCommandIndex--;
       buffer = previousCommands.at(previousCommandIndex) || "";
       typedText.textContent = buffer;
-      promptSymbol.textContent = "$ ";
-      
-      e.preventDefault(); // Prevent default behavior of ArrowUp
+    }
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    if (previousCommands.length > 0 && previousCommandIndex < 0) {
+        previousCommandIndex++;
+        buffer = previousCommands.at(previousCommandIndex) || "";
+         if (previousCommandIndex === 0) buffer = ""; // Clear if back to "current"
+    } else {
+        buffer = ""; // Clear if already at current or no history
+    }
+    typedText.textContent = buffer;
+    e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    if (!isComposing && cursorPosition > 0) {
+      cursorPosition--;
+      updateInputDisplay();
     }
     return;
   }
-  else if (e.key === "ArrowDown") {
-    // If the user presses ArrowDown, show the next command
-    if (previousCommands.length > 0 && previousCommandIndex <= 0) {
-      // console.log(previousCommandIndex, previousCommands.at(previousCommandIndex));
-      if (previousCommandIndex == 0) {
-        buffer = "";
-        typedText.textContent = buffer;
-        promptSymbol.textContent = "$ ";
-        return;
-      }
-      previousCommandIndex++;
-      buffer = previousCommands.length > 0 ? previousCommands.at(previousCommandIndex) : "";
-      typedText.textContent = buffer;
-      promptSymbol.textContent = "$ ";
-      e.preventDefault(); // Prevent default behavior of ArrowDown
+  else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    if (!isComposing && cursorPosition < buffer.length) {
+      cursorPosition++;
+      updateInputDisplay();
     }
+    return;
   }
+
+
   if (e.key === "Backspace") {
     buffer = buffer.slice(0, -1);
   } else if (e.key === "Enter") {
-    // If the user just entered space, we should not process the command
-    if (buffer.trim() === "") {
-      print(`$ ${buffer}`);
-      buffer = "";
-      typedText.textContent = "";
-      promptSymbol.textContent = "$ ";
-      return;
+    if (promptSymbol.style.display === "none" && commanding) { // If a command is running
+        // Potentially send input to command or ignore
+        return;
     }
-    previousCommands.push(buffer);
-    processCommand(buffer.trim());
-    buffer = "";
-  } 
-  else if (e.key === "c" && control_cmd) {
-    // If Control+C is pressed, clear the input buffer
-    buffer = "";
-    typedText.textContent = "";
-    promptSymbol.textContent = "$ ";
-    interrupt();
-    e.preventDefault(); // Prevent default behavior of Control+C
+    if (buffer.trim() === "") {
+      print(`$ ${buffer}`); // Print prompt and empty buffer
+      // buffer = ""; // Buffer already empty or just spaces
+      // typedText.textContent = buffer;
+      // return; // No command to process
+    } else {
+        previousCommands.push(buffer);
+        if (previousCommands.length > 20) previousCommands.shift(); // Limit history
+        previousCommandIndex = 0; // Reset index to point "after" the last command
+        processCommand(buffer.trim());
+    }
+    buffer = ""; // Clear buffer for next command
+
+  } else if (e.key === "c" && control_cmd) {
+    if (commanding) {
+        interrupt();
+    } else {
+        buffer = ""; // Clear current input buffer
+        print(`$ ${buffer}`); // Show empty prompt
+    }
+    e.preventDefault();
     return;
   }
-  else if (e.key.length === 1) {
+  // Filter out non-printable keys, except space
+  else if (e.key.length === 1) { // Handles most printable characters including space
     buffer += e.key;
   } 
-  // Include Space
   typedText.textContent = buffer;
 });
 
-
 function interrupt() {
-  // If the user presses Control+C, clear the input buffer
-  // Print ^C to the output
-  console.log(buffer);
-  if (commanding){
-    print(`^C`);
-    buffer = "";
-    typedText.textContent = "";
-    promptSymbol.textContent = "$ ";
+  if (commanding) {
+    print("^C");
+    commanding = false; // Signal async command to stop
+    done(); // Restore prompt
   }
-  else if (buffer === "") {
-    print(`$ ${buffer}`);
-  } 
-  commanding = false; // Reset command running state
+   buffer = ""; // Clear current input buffer
+   typedText.textContent = buffer;
 }
 
 document.body.addEventListener("keyup", e => {
-  // console.log(e.key);
   if (e.key === "Control" || e.key === "Meta") {
-    // Reset control_cmd when Control or Meta key is released
     control_cmd = false;
-    // console.log(control_cmd);
   }
-  // // If the user presses Enter, we should not show the prompt symbol
-  // if (e.key === "Enter") {
-  //   promptSymbol.textContent = "";
-  // } else {
-  //   promptSymbol.textContent = "$ ";
-  // }
+}); 
+
+// Handle paste
+document.body.addEventListener('paste', (e) => {
+    if (isComposing || commanding || promptSymbol.style.display === "none") {
+        return; // Don't paste if composing, command running, or input hidden
+    }
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    buffer = buffer.substring(0, cursorPosition) + text + buffer.substring(cursorPosition);
+    cursorPosition += text.length;
+    updateInputDisplay();
 });
 
+// Function to update the input display (typedText and blockCursor)
+function updateInputDisplay() {
+  if (isComposing) {
+    // During composition, blockCursor is generally hidden or IME handles cursor
+    // The compositionupdate handler will manage typedText.innerHTML
+    blockCursor.style.display = "none";
+    return;
+  }
+
+  if (cursorPosition === buffer.length) {
+    typedText.textContent = buffer;
+    blockCursor.style.display = "inline-block"; // Show block cursor at the end
+  } else {
+    // Show highlighted char as cursor
+    const charAtCursor = buffer[cursorPosition] || ' '; // Use space if char is undefined (should not happen with correct logic)
+    typedText.innerHTML =
+      escapeHtml(buffer.substring(0, cursorPosition)) +
+      `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
+      escapeHtml(buffer.substring(cursorPosition + 1));
+    blockCursor.style.display = "none"; // Hide block cursor when internal cursor is shown
+  }
+}
+
+// Composition
+// IME Composition Event Handlers
+document.body.addEventListener('compositionstart', (e) => {
+  if (commanding || promptSymbol.style.display === "none") return;
+  isComposing = true;
+  // Hide block cursor, updateInputDisplay will be called by compositionupdate or keydown
+  blockCursor.style.display = "none"; 
+  // Initial display before first compositionupdate event
+  typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
+                        `<span class="composing-text"></span>` + // Empty composing span initially
+                        escapeHtml(buffer.substring(cursorPosition));
+});
+
+document.body.addEventListener('compositionupdate', (e) => {
+  if (commanding || promptSymbol.style.display === "none") return;
+  if (!isComposing) return;
+  // Display the currently composing text (e.data)
+  // The text in `buffer` before `cursorPosition` and after `cursorPosition` remains unchanged
+  typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
+                        `<span class="composing-text">${escapeHtml(e.data)}</span>` +
+                        escapeHtml(buffer.substring(cursorPosition));
+});
+
+document.body.addEventListener('compositionend', (e) => {
+  if (commanding || promptSymbol.style.display === "none") return;
+  if (!isComposing) return; // Should not happen if logic is correct
+  
+  isComposing = false;
+  const composedText = e.data;
+
+  if (composedText) {
+    buffer = buffer.substring(0, cursorPosition) + composedText + buffer.substring(cursorPosition);
+    cursorPosition += composedText.length;
+  }
+  updateInputDisplay(); // Update to show final composed text and correct cursor
+});
+
+// document.body.addEventListener("click", e => {
+//   // Ensure the body is focused to capture keydown events
+//   e.preventDefault();
+// }
+// );
+
+// NEW function to update lines on resize
+function updateLinesOnResize() {
+  updateCharacterWidth(); // Recalculate char width in case of zoom
+  const newLineWidth = output.clientWidth;
+  const charWidth = CHARACTER_WIDTH;
+
+  if (charWidth === 0) {
+    // console.warn("Character width is zero on resize, cannot update lines.");
+    return; 
+  }
+
+  const lines = output.getElementsByClassName("output-line");
+  for (let i = 0; i < lines.length; i++) {
+    const lineDiv = lines[i];
+    const rawText = lineDiv.getAttribute("data-raw-text");
+
+    if (rawText === null) continue; // Skip if no raw text stored
+
+    const textStr = String(rawText);
+    const totalTextPixelWidth = textStr.length * charWidth;
+    let numSpaces = 0;
+
+    if (totalTextPixelWidth < newLineWidth) {
+      numSpaces = Math.floor((newLineWidth - totalTextPixelWidth) / charWidth);
+    } else {
+      const lastLineActualPixelWidth = totalTextPixelWidth % newLineWidth;
+      if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+        numSpaces = 0;
+      } else {
+        numSpaces = Math.floor((newLineWidth - lastLineActualPixelWidth) / charWidth);
+      }
+    }
+    numSpaces = Math.max(0, numSpaces);
+    const filledText = " ".repeat(numSpaces);
+    lineDiv.textContent = textStr + filledText;
+  }
+}
+
+// Debounce resize handler for performance
+let resizeTimeout;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(updateLinesOnResize, 150); // Adjust delay (e.g., 100-250ms)
+});
+
+// Initial setup on window load
 window.onload = () => {
-  document.body.focus();
+  document.body.focus(); // Focus the body to capture keydown events
+  updateCharacterWidth(); // Initial calculation of CHARACTER_WIDTH
+  // Optionally call updateLinesOnResize if there's any pre-rendered content
+  // that needs alignment on load, though usually output starts empty.
+  // updateLinesOnResize(); 
 };
 
-
-
-
-
-
-
+// Ping.js (provided by user, assumed to be at the end or imported)
+// Ensure Ping class is available before ping_func is called.
+var Ping = function(opt) { /* ... Ping class code ... */ };
+Ping.prototype.ping = function(source, callback) { /* ... Ping.prototype.ping code ... */ };
+if (typeof exports !== "undefined") { /* ... Ping module exports ... */ } else { window.Ping = Ping; } 
 
 
 var Ping = function(opt) {
@@ -363,6 +615,34 @@ var Ping = function(opt) {
     this.timeout = this.opt.timeout || 0;
     this.logError = this.opt.logError || false;
 };
+
+function detectBrowser() {
+    var userAgent = navigator.userAgent;
+    if (userAgent.includes("Firefox/")) {
+    return "Firefox";
+  } else if (userAgent.includes("Edg/")) {
+    return "Edge";
+  } else if (userAgent.includes("Chrome/") && !userAgent.includes("Edg/") && !userAgent.includes("OPR/")) {
+    return "Chrome";
+  } else if (userAgent.includes("Safari/") && !userAgent.includes("Chrome/")) {
+    return "Safari";
+  } else if (userAgent.includes("OPR/") || userAgent.includes("Opera")) {
+    return "Opera";
+  } else {
+    return "Unknown browser";
+  }
+}
+
+function welcomeMsg() {
+    print(`Terminal Startup - ${detectBrowser()}`);
+    print("Author: Tian Yi, Bao");
+    print("");
+    print("Type 'help' for a list of commands.");
+    print("");
+}
+
+welcomeMsg();
+
 
 /**
  * Pings source and triggers a callback when completed.

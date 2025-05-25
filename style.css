@@ -1,10 +1,11 @@
+/* existing styles from style.css */
 body {
   margin: 0;
   background-color: #000;
   color: rgb(255, 255, 255);
   font-family: monospace;
   font-size: 1rem;
-  
+  min-height: 100vh;
 }
 
 .terminal {
@@ -14,16 +15,24 @@ body {
 
 .typed-container {
   display: inline-block;
-  /* white-space: pre-wrap; */
-  word-break: break-word;
+  word-break: break-all; /* Changed from break-word for better terminal feel */
   max-width: 100%;
-  overflow-wrap: break-word;
+  overflow-wrap: break-word; /* Keep for safety */
+  
 }
 
 #typedText {
-  white-space: pre-wrap;       /* 保留空格并自动换行 */
-  word-break: break-word;
+  white-space: pre-wrap;
+  word-break: break-all; /* Consistent with container */
   overflow-wrap: break-word;
+  display: inline; /* Ensure it flows with other inline elements if any change */
+  /* Disable border and select highlight */
+  border:none;
+  outline: none;
+  user-select: none;
+  caret-color: transparent;
+
+  line-height: 1.2;
 }
 
 
@@ -35,70 +44,82 @@ body {
 }
 
 .output-line-powershell {
-  /* padding: 0.5rem 0; */
-  line-height: 1.5;
+  line-height: 1.2;
   font-size: 16px;
   font-family: Consolas, monospace;
 }
 
+/* This is the style for the character AT the cursor position (in-text cursor) */
 .highlighted-char {
-  background-color: #ffffff; /* Matches ::selection background */
-  color: #000000;           /* Matches ::selection text color */
-  /* display: inline-block; */ 
+  background-color: rgb(255, 255, 255); /* Green background, like the block cursor */
+  color: #000000;           /* Black text */
+  /* animation: blink 1s steps(2, start) infinite; */
+  display: inline-block; /* Ensures background covers the char properly */
+  /* If you want it to look like a selection, revert to:
+  background-color: #ffffff; 
+  color: #000000; 
+  animation: none; 
+  */
 }
 
+/* Style for IME composing text */
+.composing-text {
+  text-decoration: underline;
+  background-color: #ffffff; /* Slightly different background during composition */
+  color: #000000;
+}
+
+
 .output-info {
-  color: #fff; /* Green text for info */
+  color: #fff;
 }
 
 .output-warning {
-  color: #ffcc00; /* Yellow text for warnings */
+  color: #ffcc00;
 }
 
 .output-error {
-  color: #ff7474; /* Red text for errors */
+  color: #ff7474;
 }
 
 .input-line {
   display: flex;
   align-items: center;
-  /* flex-wrap: wrap; */
   cursor: default;
-  line-height: 1.5;
+  line-height: 1.2;
 }
 
 .prompt {
   margin-right: 0.55rem;
-  align-self: flex-start;
+  align-self: flex-start; /* Keep if you want prompt at top if line wraps (though input shouldn't wrap like this) */
 }
 
-.cursor {
-  display: inline-block;
-  width: 1ch;
-  background-color: #0f0;
-  animation: blink 1s steps(2, start) infinite;
+.cursor { /* This is the block cursor '█' */
+  display: inline-block; /* Will be toggled by JS */
+  width: 1ch; /* or use font-metric based width if possible */
+  /* background-color: rgb(255, 255, 255); */
+  /* animation: blink 1s steps(2, start) infinite; */
+  /* margin-left: -1px; /* Optional: slight adjustment if needed */
 }
 
 @keyframes blink {
   to {
-    background-color: transparent;
+    background-color: black;
+    color: inherit; /* Ensure text color reverts if highlighted-char also uses this */
   }
 }
 
 #output {
-  /* margin-bottom: 0.5rem; */
-  line-height: 1.5;
+  line-height: 1.2;
   cursor: default;
 }
 
-/* Change the color of the selected text */
 ::selection {
-  background-color: #ffffff; /* Yellow background */
-  color: #000000; /* Black text */
+  background-color: #ffffff;
+  color: #000000;
 }
 
-/* For better browser compatibility */
 ::-moz-selection {
-  background-color: #ffffff; /* Yellow background for Firefox */
-  color: #000000; /* Black text for Firefox */
+  background-color: #ffffff;
+  color: #000000;
 }
