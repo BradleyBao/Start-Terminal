@@ -65,6 +65,17 @@ const commands = {
     location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
     return true;
   },
+  baidu: (args, options) => {
+    if (args.length === 0) return "Usage: baidu <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
+    return true;
+  },
   goto: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: goto <url> [-b]";
@@ -101,6 +112,28 @@ const commands = {
       return true;
     }
     location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+    return true;
+  },
+  bilibili: (args, options) => {
+    if (args.length === 0) return "Usage: bilibili <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
+    return true;
+  },
+  spotify: (args, options) => {
+    if (args.length === 0) return "Usage: spotify <query> [-b]";
+    const query = args.join(" ");
+    if (options.b) {
+      // If -b option is used, open in a new tab
+      window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
+      return true;
+    }
+    location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
     return true;
   },
   ping: (args, options) => {

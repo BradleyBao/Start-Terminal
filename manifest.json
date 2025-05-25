@@ -1,9 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "Terminal New Tab",
+  "name": "__MSG_appName__",
+  "description": "__MSG_appDesc__",  
+  "author": "Tian Yi, Bao",
+  "homepage_url": "https://www.tianyibrad.com",
   "version": "1.0",
-  "description": "A terminal-style custom new tab page.",
+  "default_locale": "en",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "permissions": [],
+  "action": {
+    "default_icon": "icons/icon128.png"
   }
 }

@@ -1,0 +1,8 @@
+{
+  "appName": {
+    "message": "Start Terminal"
+  },
+  "appDesc": {
+    "message": "Replace the default New Tab page with a terminal-like interface."
+  }
+}
