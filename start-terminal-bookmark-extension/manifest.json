@@ -12,7 +12,7 @@
   "icons": {
     "128": "icons/icon128.png"
   },
-  "permissions": [],
+  "permissions": ["bookmarks", "identity"],
   "action": {
     "default_icon": "icons/icon128.png"
   }

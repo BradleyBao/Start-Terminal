@@ -43,6 +43,14 @@ body {
   max-width: 100%;
 }
 
+.output-line-inline {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  display: inline;
+}
+
 .output-line-powershell {
   line-height: 1.2;
   font-size: 16px;
@@ -80,6 +88,14 @@ body {
 
 .output-error {
   color: #ff7474;
+}
+
+.output-folder {
+  color: #1900d7;
+}
+
+.output-file {
+  color: #ffffff;
 }
 
 .input-line {

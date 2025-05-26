@@ -5,12 +5,69 @@ const typedText = document.getElementById("typedText"); // This will show text b
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
 const terminal = document.getElementById("terminal");
 const promptSymbol = document.getElementById("promptSymbol");
+const supported_search_engine = ["google", "bing", "baidu"];
 
 var control_cmd = false;
 var commanding = false;
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
-let isComposing = false; // For IME input
+let isComposing = false; // For IME input 
+let default_mode = false; 
+let default_search_engine = "google"; 
+
+let user = ""
+
+const BROWSER_TYPE = detectBrowser();
+let current = null;
+let root = null;
+let path = []; 
+
+let full_path = null;
+
+chrome.identity.getProfileUserInfo(userInfo => {
+  // userInfo.email 
+  user = userInfo.email;
+});
+
+chrome.bookmarks.getTree(bookmarkTree => {
+  get_fav(bookmarkTree);
+});
+
+function get_fav(bookmarks) {
+  root = bookmarks[0];
+  current = root;
+  path = [root];
+  
+  update_user_path();
+};
+
+function update_user_path() {
+  full_path = user;
+  if (user !== "") {
+    full_path += " ";
+  }
+  full_path += path.map(p => p.title || "~").join("/") || "/";
+  full_path +=  " $";
+  promptSymbol.textContent = full_path;
+}
+
+function listChildren() {
+  if (!current.children) {
+    print("Not a directory") 
+    return ""
+  }
+
+  let printout = "";
+
+  current.children.forEach((child, index) => {
+    if (child.children) {
+      printLine(`${child.title}`, "folder")
+    } else {
+      printLine(`${child.title}`, "file")
+    }
+    
+  })
+}
 
 const previousCommands = [];
 let previousCommandIndex = 0;
@@ -70,6 +127,44 @@ let CHARACTER_WIDTH = getMonospaceCharacterWidth();
 
 function updateCharacterWidth() {
     CHARACTER_WIDTH = getMonospaceCharacterWidth();
+}
+
+function changeDir(name) {
+  name = name[0];
+  if (name === "..") {
+    if (path.length > 1) {
+      path.pop();
+      current = path[path.length - 1];
+    } else {
+      
+    }
+    update_user_path();
+    return;
+  }
+
+  let index_path = path.map(p => p.title || "/home").join("/") || "/";
+
+  const target = findChildByTitle(current.children || [], name);
+  if (target) {
+    current = target;
+    path.push(current);
+  } else {
+    print(`cd: Cannot find the path ${index_path}/${name}.`, "error"); 
+  }
+
+  update_user_path();
+  buffer = "";
+  cursorPosition = 0;
+  updateInputDisplay(); // Clears visual input line
+}
+
+function findChildByTitle(children, title) {
+  return children.find(child => child.title === title && child.children);
+}
+
+function findChildByTitleFile(children, title) {
+  return children.find(child => child.title === title && !child.children);
+
 }
 
 const commands = {
@@ -176,6 +271,13 @@ const commands = {
     awating();
     // return result;
   },
+  locale: (args, options) => {
+    // Get browser language 
+    print("");
+    print("LANG="+navigator.languages);
+    print("LANGUAGE="+navigator.languages);
+    return "";
+  },
   date: (args, options) => {
     const now = new Date();
     const formattedDate = now.toLocaleString('en-US', {
@@ -194,7 +296,44 @@ const commands = {
   clear: (args, options) => {
     clearOutput();
   },
+  ls: (args, options) => {
+    listChildren();
+  },
+  cd: (args, options) => {
+    if (!args) {
+      return "Usage: cd <directory>"
+    }
+    changeDir(args);
+  },
+  pwd: (args, options) => {
+    return path.map(p => p.title || "/home").join("/") || "/";
+  },
   gh: () => location.href = "https://github.com",
+  default: (args, options) => {
+    // Change the default search engine
+    if (args.length === 0) return "Usage: default <search engine> (google, bing, baidu)";
+    let arg = args[0];
+    if (arg == "on") {
+      default_mode = true;
+      print("Default mode is on. ");
+      print("To turn it off, type 'default off'");
+    } else if (arg == "off") {
+      default_mode = false;
+      print("Default mode is off. ");
+      print("To turn it on, type 'default on'");
+    }
+    else if (supported_search_engine.includes(arg)){
+      default_search_engine = arg;
+      if (!default_mode) {
+        print(`Successfully changed default search engine to ${arg}`);
+        print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning"); 
+      }
+    }
+    else {
+      print(`Unable to change default search engine: ${arg} is not supported.`, "error");
+    }
+    
+  },
   help: () => {
     print("Commands Available:");
     print(" - google <query> [-b]: Search Google.");
@@ -312,6 +451,58 @@ async function ping_func(url, options) {
   done();
 }
 
+function print_inline(text, type = "info") {
+  const lineWidth = output.clientWidth;
+  const charWidth = CHARACTER_WIDTH;
+
+  const textStr = String(text);
+  const totalTextPixelWidth = textStr.length * charWidth;
+  let numSpaces = 0;
+
+  if (charWidth === 0) {
+    // fallback: just append new inline span
+    const span = document.createElement('span');
+    span.className = `output-inline output-${type}`;
+    span.textContent = textStr;
+    output.appendChild(span);
+    window.scrollTo(0, document.body.scrollHeight);
+    return;
+  }
+
+  // 计算补齐空格数（用于对齐）
+  if (totalTextPixelWidth < lineWidth) {
+    numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
+  } else {
+    const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
+    if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+      numSpaces = 0;
+    } else {
+      numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
+    }
+  }
+
+  numSpaces = Math.max(0, numSpaces);
+  const filledText = " ".repeat(numSpaces);
+
+  // 尝试获取最后一行
+  let lastLine = output.lastElementChild;
+
+  // 如果没有最后一行或最后一行不是 inline 输出，就新建一行
+  if (!lastLine || !lastLine.classList.contains("output-line-inline")) {
+    lastLine = document.createElement("div");
+    lastLine.className = `output-line output-line-inline output-${type}`;
+    output.appendChild(lastLine);
+  }
+
+  // 追加 inline span 到当前行
+  const span = document.createElement("span");
+  span.className = `output-inline output-${type}`;
+  span.textContent = textStr + filledText;
+  lastLine.appendChild(span);
+
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
 
 function print(text, type = "info") {
   const lineWidth = output.clientWidth;
@@ -354,12 +545,71 @@ function print(text, type = "info") {
   window.scrollTo(0, document.body.scrollHeight);
 }
 
+function printLine(text, type = "info") {
+  const lineWidth = output.clientWidth;
+  const charWidth = CHARACTER_WIDTH;
+
+  if (charWidth === 0) {
+    const lineDiv = document.createElement('div');
+    lineDiv.className = 'output-line output-line-powershell';
+    lineDiv.setAttribute(`data-raw-text`, String(text));
+    lineDiv.textContent = String(text);
+    output.appendChild(lineDiv);
+    window.scrollTo(0, document.body.scrollHeight);
+    return;
+  }
+  
+  const textStr = String(text);
+  // const totalTextPixelWidth = textStr.length * charWidth;
+  // let numSpaces = 0;
+
+  // if (totalTextPixelWidth < lineWidth) {
+  //   numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
+  // } else {
+  //   const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
+  //   if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+  //     numSpaces = 0;
+  //   } else {
+  //     numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
+  //   }
+  // }
+  
+  // numSpaces = Math.max(0, numSpaces);
+  // const filledText = " ".repeat(numSpaces);
+
+  const lineDiv = document.createElement('div');
+  lineDiv.className = `output-line-inline output-line-powershell output-${type}`;
+  lineDiv.setAttribute('data-raw-text', textStr);
+  lineDiv.textContent = textStr + "\t";
+
+  output.appendChild(lineDiv);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
 function processCommand(input) {
-  print(`$ ${input}`); // Echo command with padding
+  print(`${full_path} ${input}`); // Echo command with padding
   const parsed = parseCommandLine(input);
   if (!parsed) {
       print("Invalid command syntax."); // Provide more specific feedback
       return;
+  }
+
+  // If start with ./
+  if (input.startsWith("./")) {
+    let name = input.substring(2).trim();
+    // Get the target child 
+    const target = findChildByTitleFile(current.children || [], name);
+    if (target) {
+      // If target is a file, open it
+      if (target.url) {
+        if (target.url.startsWith("javascript:")) {
+          print(`Executing JavaScript code from ${target.title} is not allowed for security reasons.`, "error");
+          return;
+        }
+        location.href = target.url; // Navigate to the URL
+      }
+    }
+    return;
   }
 
   const { command, args, options } = parsed;
@@ -377,6 +627,13 @@ function processCommand(input) {
     }
     // If action is async (like ping), it should handle its own "done" state.
   } else {
+    if (default_mode) {
+      const fix_action = commands[default_search_engine] 
+      args.unshift(command);
+      const fix_result = fix_action(args, options);
+      return; 
+    }
+    
     print(`Unknown command: '${command}' (try 'help')`, "error");
     print("");
   }
@@ -390,7 +647,7 @@ function awating() {
 
 function done() {
   promptSymbol.style.display = "inline";
-  promptSymbol.textContent = "$ ";
+  promptSymbol.textContent = full_path + " ";
   // buffer might contain partial input if a command was interrupted
   // updateInputDisplay will render it correctly with cursorPosition
   updateInputDisplay(); 
@@ -406,7 +663,7 @@ function clearOutput() {
   previousCommandIndex = 0;
   // done(); // done() might be redundant if updateInputDisplay covers it
   promptSymbol.style.display = "inline"; // Ensure prompt is visible
-  promptSymbol.textContent = "$ ";
+  promptSymbol.textContent = full_path + " ";
   blockCursor.style.display = "inline-block"; // Ensure cursor is visible
   document.body.focus();
 }
@@ -481,7 +738,7 @@ document.body.addEventListener("keydown", e => {
         interrupt();
     } else if (buffer.trim() === "")
     {
-      print("$");
+      print(full_path);
       buffer = "";
       cursorPosition = 0;
       updateInputDisplay();
@@ -489,7 +746,7 @@ document.body.addEventListener("keydown", e => {
     else {
         buffer = "";
         cursorPosition = 0;
-        print(`$ ${typedText.textContent}^C`); // Show current line content before clearing
+        print(`${full_path} ${typedText.textContent}^C`); // Show current line content before clearing
         updateInputDisplay();
     }
     return;
@@ -554,7 +811,7 @@ document.body.addEventListener("keydown", e => {
     
     const commandToProcess = buffer.trim(); // Process the trimmed buffer
     if (commandToProcess === "") {
-      print(`$ ${buffer}`); // Echo the (potentially untrimmed) buffer content
+      print(`${full_path} ${buffer}`); // Echo the (potentially untrimmed) buffer content
     } else {
       if (buffer !== previousCommands.at(-1)) { // Avoid duplicate empty entries or same last command
          previousCommands.push(buffer); // Store original buffer with spaces if intended
@@ -714,8 +971,14 @@ function welcomeMsg() {
 
 // If focus on terminal, focus on typedText
 document.body.addEventListener("click", function() {
-  console.log("Focused");
-    typedText.focus(); // 点击后聚焦到 edit div
+  setTimeout(() => {
+    // 只有在没有选中文本时才 focus
+    if (!window.getSelection().toString()) {
+      console.log("Focused");
+      typedText.focus();
+    }
+  }, 0);
+  // typedText.focus(); // 点击后聚焦到 edit div
 });
 
 
