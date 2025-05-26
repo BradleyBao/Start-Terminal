@@ -974,7 +974,7 @@ document.body.addEventListener("click", function() {
   setTimeout(() => {
     // 只有在没有选中文本时才 focus
     if (!window.getSelection().toString()) {
-      console.log("Focused");
+      // console.log("Focused");
       typedText.focus();
     }
   }, 0);
