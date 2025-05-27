@@ -12,7 +12,7 @@ var commanding = false;
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
-let default_mode = false;
+let default_mode = true;
 let default_search_engine = "google";
 
 let user = ""
@@ -324,15 +324,19 @@ const commands = {
   gh: () => location.href = "https://github.com",
   default: (args, options) => {
     // Change the default search engine
-    if (args.length === 0) return "Usage: default <search engine> (google, bing, baidu)";
+    if (args.length === 0) {
+      print(`Current default search engine is ${default_search_engine}`, "highlight");
+      print(`Current default mode is ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
+      return "Usage: default <search engine> (google, bing, baidu)";
+    }
     let arg = args[0];
     if (arg == "on") {
       default_mode = true;
-      print("Default mode is on. ");
+      print("Default mode is on. ", "success");
       print("To turn it off, type 'default off'");
     } else if (arg == "off") {
       default_mode = false;
-      print("Default mode is off. ");
+      print("Default mode is off. ", "success");
       print("To turn it on, type 'default on'");
     }
     else if (supported_search_engine.includes(arg)){
@@ -1030,7 +1034,7 @@ function welcomeMsg() {
     print("");
     print("Default Search Engine:");
     print(`  - Current: ${default_search_engine}`, "highlight");
-    print("  - Current default mode: " + (default_mode ? "on" : "off"), "highlight");
+    print("  - Current default mode: " + (default_mode ? "on" : "off"), `${default_mode ? "success" : "warning"}`);
 
     print("  - Supported: google, bing, baidu");
 
