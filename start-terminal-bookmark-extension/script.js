@@ -11,21 +11,21 @@ var control_cmd = false;
 var commanding = false;
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
-let isComposing = false; // For IME input 
-let default_mode = false; 
-let default_search_engine = "google"; 
+let isComposing = false; // For IME input
+let default_mode = false;
+let default_search_engine = "google";
 
 let user = ""
 
 const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
-let path = []; 
+let path = [];
 
 let full_path = null;
 
 chrome.identity.getProfileUserInfo(userInfo => {
-  // userInfo.email 
+  // userInfo.email
   user = userInfo.email;
 });
 
@@ -37,7 +37,7 @@ function get_fav(bookmarks) {
   root = bookmarks[0];
   current = root;
   path = [root];
-  
+
   update_user_path();
 };
 
@@ -53,19 +53,32 @@ function update_user_path() {
 
 function listChildren() {
   if (!current.children) {
-    print("Not a directory") 
+    print("Not a directory")
     return ""
   }
 
   let printout = "";
+  let index_child = 0;
 
   current.children.forEach((child, index) => {
     if (child.children) {
-      printLine(`${child.title}`, "folder")
+      // If last child 
+      if (index_child === current.children.length - 1) {
+        printLine(`${child.title}`, "folder", true); // Use true to indicate end of line
+      } else {
+        printLine(`${child.title}`, "folder");
+      }
     } else {
-      printLine(`${child.title}`, "file")
+      // If last child
+      if (index_child === current.children.length - 1) {
+        printLine(`${child.title}`, "file", true); // Use true to indicate end of line
+      } else {
+        // If not last child, just print the file name
+        printLine(`${child.title}`, "file");
+      }
     }
-    
+    index_child++;
+
   })
 }
 
@@ -114,12 +127,12 @@ function getMonospaceCharacterWidth() {
     span.style.fontSize = '16px';
     span.style.visibility = 'hidden';
     span.style.position = 'absolute';
-    
+
     const parentElement = document.getElementById("output") || document.body;
     parentElement.appendChild(span);
     const width = span.getBoundingClientRect().width;
     parentElement.removeChild(span);
-    
+
     return width > 0 ? width : 8;
 }
 
@@ -136,7 +149,7 @@ function changeDir(name) {
       path.pop();
       current = path[path.length - 1];
     } else {
-      
+
     }
     update_user_path();
     return;
@@ -149,7 +162,7 @@ function changeDir(name) {
     current = target;
     path.push(current);
   } else {
-    print(`cd: Cannot find the path ${index_path}/${name}.`, "error"); 
+    print(`cd: Cannot find the path ${index_path}/${name}.`, "error");
   }
 
   update_user_path();
@@ -206,7 +219,7 @@ const commands = {
     if (args.length === 0) return "Usage: goto <url> [-b]";
     const url = args.join(" ");
     // if target blank is needed, open in a new tab
-    
+
     if (!/^https?:\/\//i.test(url)) {
       // Add a protocol if missing
       let rephrased_url = `https://${url}`; // Use https as default
@@ -272,7 +285,7 @@ const commands = {
     // return result;
   },
   locale: (args, options) => {
-    // Get browser language 
+    // Get browser language
     print("");
     print("LANG="+navigator.languages);
     print("LANGUAGE="+navigator.languages);
@@ -326,13 +339,13 @@ const commands = {
       default_search_engine = arg;
       if (!default_mode) {
         print(`Successfully changed default search engine to ${arg}`);
-        print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning"); 
+        print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
       }
     }
     else {
       print(`Unable to change default search engine: ${arg} is not supported.`, "error");
     }
-    
+
   },
   help: () => {
     print("Commands Available:");
@@ -348,11 +361,18 @@ const commands = {
     print(" - clear: Clear terminal output.");
     print(" - gh: Navigate to GitHub.");
     print(" - help: Show this help message.");
-    print("\nOptions:");
+    print("");
+    print("Default Search Engine:");
+    print(`  - Current: ${default_search_engine}`);
+    print("  - Change with: default <search engine> (google, bing, baidu)");
+    print("  - Turn on / off default mode with: default on / off");
+    print("");
+    print("Options:");
     print("  -b: Open search results or URL in a new tab.");
     print("  -t: (ping) Ping continuously.");
     print("  -n <count>: (ping) Number of pings.");
-    print("\nNavigation:");
+    print("");
+    print("Navigation:");
     print("  ArrowUp/ArrowDown: Cycle through command history.");
     print("  ArrowLeft/ArrowRight: Move cursor in the current command line.");
     print("  Ctrl+C: Interrupt running command or clear current input line.");
@@ -372,7 +392,7 @@ function parseCommandLine(input) {
 
   const optionRequiresValue = {
     ping: ["n"],
-    google: [], 
+    google: [],
     yt: [],
     youtube: [],
     bing: [],
@@ -404,14 +424,19 @@ function parseCommandLine(input) {
 }
 
 async function ping_func(url, options) {
-  print(""); 
+  print("");
   // Check if the URL has http or https protocol
   if (!/^https?:\/\//i.test(url)) {
     url = `http://${url}`; // 默认使用 http 协议
   }
 
-  // Command running 
+  // Command running
   commanding = true;
+
+  // save all pings results for calculate minimum, maximum, average
+  let pingResults = [];
+  let errorPings = 0;
+  let allPings = 0;
 
   var p = new Ping();
   var times = options.n || 4; // 默认 ping 4 次
@@ -426,27 +451,47 @@ async function ping_func(url, options) {
       }
       const start = Date.now();
       await p.ping(url, (error, latency) => {
+        allPings++;
         if (error) {
           console.error(`Failed to ping ${url}:`, error);
           print(`Failed to ping ${url}: ${error}`, "error");
-          commanding = false; // Reset command running state
-          done(); // Restore prompt
-          return;
+          errorPings++;
+          // commanding = false; // Reset command running state
+          // done(); // Restore prompt
+          // return;
         }
       }
       );
       const latency = Date.now() - start;
       print(`Reply from ${url}: ${latency} ms`);
+      pingResults.push(latency);
       // Sleep for 1 second
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
     }
-    
+
   } catch (error) {
     console.error(`Failed to ping ${url}:`, error);
   }
   // Reset command running state
   commanding = false;
+
+  // Calculate statistics
+  if (pingResults.length > 0) {
+    const min = Math.min(...pingResults);
+    const max = Math.max(...pingResults);
+    const avg = pingResults.reduce((sum, latency) => sum + latency, 0) / pingResults.length;
+    print("");
+    print(`Ping statistics for ${url}:`);
+    printLine(`Packets: Sent = ${allPings}, Received = ${allPings - errorPings}, Lost = ${errorPings} (${(errorPings/allPings).toFixed(2)} loss)`);
+    print(`Round Trip Times in milli-seconds (RTT):`);
+    printLine(`Minimum = ${min} ms, `);
+    printLine(`Maximum = ${max} ms, `);
+    printLine(`Average = ${avg.toFixed(2)} ms`, "info", true);
+  } else {
+    print(`No successful pings to ${url}.`, "error");
+  }
+
   print("");
   done();
 }
@@ -517,7 +562,7 @@ function print(text, type = "info") {
     window.scrollTo(0, document.body.scrollHeight);
     return;
   }
-  
+
   const textStr = String(text);
   const totalTextPixelWidth = textStr.length * charWidth;
   let numSpaces = 0;
@@ -532,7 +577,7 @@ function print(text, type = "info") {
       numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
     }
   }
-  
+
   numSpaces = Math.max(0, numSpaces);
   const filledText = " ".repeat(numSpaces);
 
@@ -545,7 +590,7 @@ function print(text, type = "info") {
   window.scrollTo(0, document.body.scrollHeight);
 }
 
-function printLine(text, type = "info") {
+function printLine(text, type = "info", endLine = false) {
   const lineWidth = output.clientWidth;
   const charWidth = CHARACTER_WIDTH;
 
@@ -558,29 +603,37 @@ function printLine(text, type = "info") {
     window.scrollTo(0, document.body.scrollHeight);
     return;
   }
-  
-  const textStr = String(text);
-  // const totalTextPixelWidth = textStr.length * charWidth;
-  // let numSpaces = 0;
 
-  // if (totalTextPixelWidth < lineWidth) {
-  //   numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
-  // } else {
-  //   const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
-  //   if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
-  //     numSpaces = 0;
-  //   } else {
-  //     numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
-  //   }
-  // }
-  
-  // numSpaces = Math.max(0, numSpaces);
-  // const filledText = " ".repeat(numSpaces);
+  const textStr = String(text);
 
   const lineDiv = document.createElement('div');
   lineDiv.className = `output-line-inline output-line-powershell output-${type}`;
-  lineDiv.setAttribute('data-raw-text', textStr);
-  lineDiv.textContent = textStr + "\t";
+  lineDiv.setAttribute('data-raw-text', textStr); 
+
+  // If endline is true
+  if (endLine) {
+    // Add spaces to fill the line
+    const totalTextPixelWidth = textStr.length * charWidth;
+    let numSpaces = 0;
+    if (totalTextPixelWidth < lineWidth) {
+      numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
+    } else {
+      const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
+      if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+        numSpaces = 0;
+      } else {
+        numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
+      }
+    }
+    numSpaces = Math.max(0, numSpaces);
+    const filledText = " ".repeat(numSpaces);
+    lineDiv.textContent = textStr + filledText + "\t"; // Add spaces to fill the line
+  } else {
+  // If endline is false, just add a tab
+  // Add a tab character to the end of the text
+
+    lineDiv.textContent = textStr + "\t";
+  }
 
   output.appendChild(lineDiv);
   window.scrollTo(0, document.body.scrollHeight);
@@ -597,7 +650,7 @@ function processCommand(input) {
   // If start with ./
   if (input.startsWith("./")) {
     let name = input.substring(2).trim();
-    // Get the target child 
+    // Get the target child
     const target = findChildByTitleFile(current.children || [], name);
     if (target) {
       // If target is a file, open it
@@ -614,7 +667,7 @@ function processCommand(input) {
 
   const { command, args, options } = parsed;
   const action = commands[command];
-  
+
   if (action) {
     const result = action(args, options);
     if (typeof result === "string") {
@@ -628,12 +681,12 @@ function processCommand(input) {
     // If action is async (like ping), it should handle its own "done" state.
   } else {
     if (default_mode) {
-      const fix_action = commands[default_search_engine] 
+      const fix_action = commands[default_search_engine]
       args.unshift(command);
       const fix_result = fix_action(args, options);
-      return; 
+      return;
     }
-    
+
     print(`Unknown command: '${command}' (try 'help')`, "error");
     print("");
   }
@@ -650,7 +703,7 @@ function done() {
   promptSymbol.textContent = full_path + " ";
   // buffer might contain partial input if a command was interrupted
   // updateInputDisplay will render it correctly with cursorPosition
-  updateInputDisplay(); 
+  updateInputDisplay();
   document.body.focus();
 }
 
@@ -702,9 +755,9 @@ document.body.addEventListener("keydown", e => {
     if (previousCommands.length > 0 && previousCommandIndex < 0) {
         previousCommandIndex++;
         buffer = previousCommands.at(previousCommandIndex) || "";
-         if (previousCommandIndex === 0) buffer = ""; 
+         if (previousCommandIndex === 0) buffer = "";
     } else {
-        buffer = ""; 
+        buffer = "";
     }
     cursorPosition = buffer.length;
     updateInputDisplay();
@@ -714,7 +767,7 @@ document.body.addEventListener("keydown", e => {
     e.preventDefault();
     if (!isComposing && cursorPosition > 0) {
       cursorPosition--;
-      
+
       updateInputDisplay();
     }
     return;
@@ -723,7 +776,7 @@ document.body.addEventListener("keydown", e => {
     e.preventDefault();
     if (!isComposing && cursorPosition < buffer.length) {
       cursorPosition++;
-      
+
       updateInputDisplay();
     }
     return;
@@ -763,7 +816,7 @@ document.body.addEventListener("keydown", e => {
         buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
         cursorPosition--;
       }
-      
+
     }
     updateInputDisplay();
   }
@@ -776,7 +829,7 @@ document.body.addEventListener("keydown", e => {
     cursorPosition += 2;
     updateInputDisplay();
   }
-  
+
   // For other Ctrl combinations (like Ctrl+V for paste), allow browser default if not handled
   if (control_cmd || e.metaKey || e.altKey) {
     // Specifically allow paste (Ctrl+V or Cmd+V)
@@ -808,7 +861,7 @@ document.body.addEventListener("keydown", e => {
     if (promptSymbol.style.display === "none" && commanding) {
         return; // If command is running and input is hidden, Enter does nothing
     }
-    
+
     const commandToProcess = buffer.trim(); // Process the trimmed buffer
     if (commandToProcess === "") {
       print(`${full_path} ${buffer}`); // Echo the (potentially untrimmed) buffer content
@@ -853,7 +906,7 @@ document.body.addEventListener('compositionstart', (e) => {
   if (commanding || promptSymbol.style.display === "none") return;
   isComposing = true;
   // Hide block cursor, updateInputDisplay will be called by compositionupdate or keydown
-  blockCursor.style.display = "none"; 
+  blockCursor.style.display = "none";
   // Initial display before first compositionupdate event
   typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
                         `<span class="composing-text"></span>` + // Empty composing span initially
@@ -861,20 +914,28 @@ document.body.addEventListener('compositionstart', (e) => {
 });
 
 document.body.addEventListener('compositionupdate', (e) => {
-  e.preventDefault?.();
+  e.preventDefault?.(); // This was in the original code.
   if (commanding || promptSymbol.style.display === "none") return;
   if (!isComposing) return;
-  // Display the currently composing text (e.data)
-  // The text in `buffer` before `cursorPosition` and after `cursorPosition` remains unchanged
-  typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
-                        `<span class="composing-text">${escapeHtml(e.data)}</span>` +
-                        escapeHtml(buffer.substring(cursorPosition));
+
+  // PREVIOUS LOGIC that was causing the duplicate input by manually rendering composed text:
+  // typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
+  //                       `<span class="composing-text">${escapeHtml(e.data)}</span>` +
+  //                       escapeHtml(buffer.substring(cursorPosition));
+  // NEW LOGIC:
+  // By removing the lines above, we prevent the script from manually updating
+  // typedText.innerHTML during composition. The browser's native IME handling
+  // for the contenteditable #typedText element should then be solely responsible
+  // for displaying the composing text. This is intended to resolve the "duplicate input" issue.
+  // Note: The custom styling defined by .composing-text (see style.css) will not be
+  // applied to the live composing text with this change. The text will use the browser's
+  // default IME styling during composition.
 });
 
 document.body.addEventListener('compositionend', (e) => {
   if (commanding || promptSymbol.style.display === "none") return;
   if (!isComposing) return; // Should not happen if logic is correct
-  
+
   isComposing = false;
   const composedText = e.data;
 
@@ -909,7 +970,7 @@ function updateLinesOnResize() {
   const charWidth = CHARACTER_WIDTH;
 
   if (charWidth === 0) {
-    return; 
+    return;
   }
 
   const lines = output.getElementsByClassName("output-line");
@@ -967,6 +1028,15 @@ function welcomeMsg() {
     print("");
     print("Type 'help' for a list of commands.");
     print("");
+    print("Default Search Engine:");
+    print(`  - Current: ${default_search_engine}`, "highlight");
+    print("  - Current default mode: " + (default_mode ? "on" : "off"), "highlight");
+
+    print("  - Supported: google, bing, baidu");
+
+    print("  - Change with: default <search engine> (google, bing, baidu)", "hint");
+    print("  - Turn on / off default mode with: default on / off", "hint");
+    print("");
 }
 
 // If focus on terminal, focus on typedText
@@ -986,7 +1056,7 @@ document.body.addEventListener("click", function() {
 // Ensure Ping class is available before ping_func is called.
 var Ping = function(opt) { /* ... Ping class code ... */ };
 Ping.prototype.ping = function(source, callback) { /* ... Ping.prototype.ping code ... */ };
-if (typeof exports !== "undefined") { /* ... Ping module exports ... */ } else { window.Ping = Ping; } 
+if (typeof exports !== "undefined") { /* ... Ping module exports ... */ } else { window.Ping = Ping; }
 
 var Ping = function(opt) {
     this.opt = opt || {};

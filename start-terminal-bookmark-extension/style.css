@@ -32,7 +32,7 @@ body {
   user-select: none;
   caret-color: transparent;
 
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 
@@ -52,7 +52,7 @@ body {
 }
 
 .output-line-powershell {
-  line-height: 1.2;
+  line-height: 1.1;
   font-size: 16px;
   font-family: Consolas, monospace;
 }
@@ -91,18 +91,30 @@ body {
 }
 
 .output-folder {
-  color: #1900d7;
+  color: #1b26ff;
 }
 
 .output-file {
   color: #ffffff;
 }
 
+.output-success {
+  color: #00ff00;
+}
+
+.output-highlight {
+  color: #ff00ff; /* Magenta for highlighted text */
+}
+
+.output-hint {
+  color: #00ffff; /* Cyan for hints */
+}
+
 .input-line {
   display: flex;
   align-items: center;
   cursor: default;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 .prompt {
@@ -126,7 +138,7 @@ body {
 }
 
 #output {
-  line-height: 1.2;
+  line-height: 1.1;
   cursor: default;
 }
 
