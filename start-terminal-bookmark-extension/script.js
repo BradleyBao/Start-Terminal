@@ -487,7 +487,7 @@ async function ping_func(url, options) {
     const avg = pingResults.reduce((sum, latency) => sum + latency, 0) / pingResults.length;
     print("");
     print(`Ping statistics for ${url}:`);
-    printLine(`Packets: Sent = ${allPings}, Received = ${allPings - errorPings}, Lost = ${errorPings} (${(errorPings/allPings).toFixed(2)} loss)`);
+    print(`Packets: Sent = ${allPings}, Received = ${allPings - errorPings}, Lost = ${errorPings} (${(errorPings/allPings).toFixed(2)} loss)`);
     print(`Round Trip Times in milli-seconds (RTT):`);
     printLine(`Minimum = ${min} ms, `);
     printLine(`Maximum = ${max} ms, `);
