@@ -110,6 +110,10 @@ body {
   color: #00ffff; /* Cyan for hints */
 }
 
+.output-placeholder {
+  color: #a1a1a1;
+}
+
 .input-line {
   display: flex;
   align-items: center;
