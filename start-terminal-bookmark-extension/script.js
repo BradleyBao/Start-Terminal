@@ -24,11 +24,6 @@ let path = [];
 
 let full_path = null;
 
-chrome.identity.getProfileUserInfo(userInfo => {
-  // userInfo.email
-  user = userInfo.email;
-});
-
 chrome.bookmarks.getTree(bookmarkTree => {
   get_fav(bookmarkTree);
 });
@@ -50,6 +45,133 @@ function update_user_path() {
   full_path +=  " $";
   promptSymbol.textContent = full_path;
 }
+
+// =================================================================
+// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
+// =================================================================
+async function loginWithMicrosoft() {
+    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ 从 Azure 门户获取的客户端ID
+
+    // --- PKCE 辅助函数 ---
+    // 1. 创建一个随机字符串作为 code_verifier
+    function generateCodeVerifier() {
+        const randomBytes = new Uint8Array(32);
+        crypto.getRandomValues(randomBytes);
+        return btoa(String.fromCharCode.apply(null, randomBytes))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    // 2. 用 SHA-256 哈希 verifier 来创建 code_challenge
+    async function generateCodeChallenge(verifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(verifier);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuffer)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+    // --- PKCE 辅助函数结束 ---
+
+
+    // 1. 生成PKCE码
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+
+    // 2. 构建微软授权URL (注意参数变化)
+    const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
+    authUrl.searchParams.append('client_id', MS_CLIENT_ID);
+    authUrl.searchParams.append('response_type', 'code'); // <--- 关键变化
+    authUrl.searchParams.append('redirect_uri', chrome.identity.getRedirectURL());
+    authUrl.searchParams.append('scope', 'https://graph.microsoft.com/User.Read');
+    authUrl.searchParams.append('response_mode', 'query'); // <--- 推荐使用 'query'
+    // 添加PKCE参数
+    authUrl.searchParams.append('code_challenge', codeChallenge);
+    authUrl.searchParams.append('code_challenge_method', 'S256');
+
+    console.log("即将打开授权URL:", authUrl.href);
+
+    // 3. 启动Web授权流程，获取授权码(code)
+    chrome.identity.launchWebAuthFlow({
+        url: authUrl.href,
+        interactive: true
+    }, (redirectUrl) => {
+        if (chrome.runtime.lastError || !redirectUrl) {
+            console.error("授权失败或用户取消:", chrome.runtime.lastError?.message);
+            return;
+        }
+        
+        // 4. 从重定向URL中解析出 "code"
+        const url = new URL(redirectUrl);
+        const code = url.searchParams.get('code');
+
+        if (!code) {
+            // 这里处理 redirectUrl 中返回的错误信息
+            const error = url.searchParams.get('error_description') || "未能从重定向URL中获取 code";
+            console.error("授权码获取失败:", error);
+            // 可以在此处向用户显示更友好的错误信息
+            if (error.includes("'token' is disabled")) {
+                alert("登录失败：应用配置需要更新，请联系开发者。");
+            }
+            return;
+        }
+
+        console.log("成功获取授权码 (code)!");
+
+        // 5. 将授权码交换为 Access Token
+        const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+        const params = new URLSearchParams();
+        params.append('client_id', MS_CLIENT_ID);
+        params.append('scope', 'https://graph.microsoft.com/User.Read');
+        params.append('code', code);
+        params.append('redirect_uri', chrome.identity.getRedirectURL());
+        params.append('grant_type', 'authorization_code');
+        // 发送之前生成的 verifier，用于验证
+        params.append('code_verifier', codeVerifier);
+
+        fetch(tokenUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: params
+        })
+        .then(response => response.json())
+        .then(tokenInfo => {
+            if (tokenInfo.error) {
+                console.error("Token交换失败:", tokenInfo.error_description);
+                return;
+            }
+            
+            const accessToken = tokenInfo.access_token;
+            console.log("成功交换得到 Access Token!");
+
+            // 6. 使用 Access Token 调用 Microsoft Graph API 获取用户信息 (这部分不变)
+            return fetch('https://graph.microsoft.com/v1.0/me', {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+        })
+        .then(response => response.json())
+        .then(userInfo => {
+            if (userInfo.error) {
+                console.error("获取微软用户信息失败:", userInfo.error.message);
+                return;
+            }
+            const user_info = userInfo.userPrincipalName || userInfo.displayName;
+            // console.log("成功获取微软用户信息:", user, userInfo);
+            // 在这里更新你的终端页面
+            user = user_info;
+            update_user_path();
+        })
+        .catch(error => {
+            console.error("流程中出现未知错误:", error);
+        });
+    });
+}
+
+// 调用函数
+// loginWithMicrosoft();
 
 // Helper function to set caret position in contenteditable elements
 function setCaretAtOffset(element, offset) {
@@ -420,6 +542,11 @@ const commands = {
       print(`Unable to change default search engine: ${arg} is not supported.`, "error");
     }
 
+  },
+  mslogin: () => {
+    print("Logging in with Microsoft...");
+    loginWithMicrosoft();
+    return " ";
   },
   help: () => {
     print("Commands Available:");
