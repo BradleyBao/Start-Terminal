@@ -376,6 +376,9 @@ const commands = {
   clear: (args, options) => {
     clearOutput();
   },
+  cls: (args, options) => {
+    clearOutput();
+  },
   ls: (args, options) => {
     listChildren();
   },
@@ -636,7 +639,9 @@ function printLine(text, type = "info", endLine = false) {
     }
     numSpaces = Math.max(0, numSpaces);
     const filledText = " ".repeat(numSpaces);
-    lineDiv.textContent = textStr + filledText + "\t"; // Add spaces to fill the line
+    // Remove filled text last space
+    // filledText = filledText.substring(0, filledText.length);
+    lineDiv.textContent = textStr + filledText; // Add spaces to fill the line
   } else {
   // If endline is false, just add a tab
   // Add a tab character to the end of the text
@@ -820,6 +825,31 @@ document.body.addEventListener("keydown", e => {
       cursorPosition++;
       updateInputDisplay();
     } // Allow default if composing
+    return;
+  }
+
+  // Copy: Ctrl + Shift + C or Cmd + Shift + C
+  if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+    e.preventDefault();
+    // Get Selected Text
+    const selection = window.getSelection();
+    // remove white spaces after last non-space character and before \n), not only the space of the last line, but every line
+    const selectedText = selection.toString()
+      .split('\n')
+      .map(line => line.replace(/\s+$/, ''))
+      .join('\n');
+    if (selectedText) {
+      navigator.clipboard.writeText(selectedText).then(() => {
+        // print("Copied to clipboard: " + selectedText, "success");
+      }).catch(err => {
+        // print("Failed to copy: " + err, "error");
+      });
+    } else {
+      // print("Nothing selected to copy.", "warning");
+    }
+
+    // Unselect text after copying
+    selection.removeAllRanges();
     return;
   }
 
@@ -1153,9 +1183,38 @@ document.body.addEventListener("keyup", e => {
 });
 
 function updateLinesOnResize() {
-  updateCharacterWidth(); // Update char width first
-  const lines = output.querySelectorAll(".output-line[data-raw-text]"); // More specific selector
-  lines.forEach(lineDiv => rewrapLine(lineDiv));
+  updateCharacterWidth();
+  const newLineWidth = output.clientWidth;
+  const charWidth = CHARACTER_WIDTH;
+
+  if (charWidth === 0) {
+    return;
+  }
+
+  const lines = output.getElementsByClassName("output-line");
+  for (let i = 0; i < lines.length; i++) {
+    const lineDiv = lines[i];
+    const rawText = lineDiv.getAttribute("data-raw-text");
+    if (rawText === null) continue;
+
+    const textStr = String(rawText);
+    const totalTextPixelWidth = textStr.length * charWidth;
+    let numSpaces = 0;
+
+    if (totalTextPixelWidth < newLineWidth) {
+      numSpaces = Math.floor((newLineWidth - totalTextPixelWidth) / charWidth);
+    } else {
+      const lastLineActualPixelWidth = totalTextPixelWidth % newLineWidth;
+      if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
+        numSpaces = 0;
+      } else {
+        numSpaces = Math.floor((newLineWidth - lastLineActualPixelWidth) / charWidth);
+      }
+    }
+    numSpaces = Math.max(0, numSpaces);
+    const filledText = " ".repeat(numSpaces);
+    lineDiv.textContent = textStr + filledText;
+  }
 }
 
 
