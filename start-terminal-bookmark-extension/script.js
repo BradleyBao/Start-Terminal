@@ -24,9 +24,9 @@ let path = [];
 
 let full_path = null;
 
-chrome.bookmarks.getTree(bookmarkTree => {
-  get_fav(bookmarkTree);
-});
+// chrome.bookmarks.getTree(bookmarkTree => {
+//   get_fav(bookmarkTree);
+// });
 
 function get_fav(bookmarks) {
   root = bookmarks[0];
@@ -358,6 +358,7 @@ function changeDir(nameParts) {
     if (path.length > 1) {
       path.pop();
       current = path[path.length - 1];
+      saveCurrentPath();
     }
     update_user_path();
     return;
@@ -367,6 +368,7 @@ function changeDir(nameParts) {
   if (target && target.children) { // Ensure it's a directory
     current = target;
     path.push(current);
+    saveCurrentPath();
   } else if (target && !target.children) {
     print(`cd: ${name}: Not a directory`, "error");
   } else {
@@ -1084,6 +1086,12 @@ function saveCommandHistory() {
   chrome.storage.sync.set({ commandHistory: previousCommands });
 }
 
+function saveCurrentPath() {
+  // Save ID, ID is unique and can be used to retrieve the bookmark later
+  const pathIds = path.map(node => node.id);
+  chrome.storage.sync.set({ bookmarkPath: pathIds });
+}
+
 async function refreshMicrosoftToken(refreshToken) {
   print("Microsoft session token expired. Attempting to refresh...", "info");
   const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
@@ -1129,8 +1137,37 @@ async function refreshMicrosoftToken(refreshToken) {
 
 // Load all settings 
 async function loadSettings() {
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth']);
+  // 1. 异步获取完整的书签树
+  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+  root = bookmarkTree[0];
+  current = root; // 默认在根目录
+  path = [root];  // 默认路径
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath']);
+// 3. 恢复书签路径
+  if (data.bookmarkPath) {
+    let restoredPathIsValid = true;
+    let tempCurrent = root;
+    let tempPath = [root];
 
+    // 从根目录开始，根据ID逐级向下查找，重建路径
+    for (let i = 1; i < data.bookmarkPath.length; i++) {
+      const nextId = data.bookmarkPath[i];
+      const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
+
+      if (nextNode && nextNode.children) { // 确保路径中的节点仍然存在且是文件夹
+        tempCurrent = nextNode;
+        tempPath.push(nextNode);
+      } else {
+        restoredPathIsValid = false; // 如果路径中某个文件夹被删了，则恢复失败
+        break;
+      }
+    }
+
+    if (restoredPathIsValid) {
+      current = tempCurrent;
+      path = tempPath;
+    }
+  }
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
     default_search_engine = data.settings.default_search_engine ?? "google";
