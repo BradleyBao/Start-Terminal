@@ -141,9 +141,7 @@ async function loginWithMicrosoft() {
 
         fetch(tokenUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: params
         })
         .then(response => response.json())
@@ -153,30 +151,36 @@ async function loginWithMicrosoft() {
                 print("Token Exchange Failed: " + tokenInfo.error_description, "error");
                 print("");
                 done();
-                return;
+                return Promise.reject(tokenInfo.error_description); // 中断链条
             }
             
             const accessToken = tokenInfo.access_token;
             console.log("Successfully get Access Token!");
             print("Successfully get Access Token", "success");
 
-            // 6. 使用 Access Token 调用 Microsoft Graph API 获取用户信息 (这部分不变)
+            // 6. 使用 Access Token 获取用户信息
             return fetch('https://graph.microsoft.com/v1.0/me', {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            });
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            })
+            .then(response => response.json())
+            .then(userInfo => ({ userInfo, tokenInfo })); // 将两个结果一起向下传递
         })
-        .then(response => response.json())
-        .then(userInfo => {
+        .then(({ userInfo, tokenInfo }) => { // 接收包含两个信息的对象
             if (userInfo.error) {
                 console.error("Failed to get user info:", userInfo.error.message);
                 print("Failed to get user info: " + userInfo.error.message, "error");
                 return;
             }
+
+            // --- 这是关键的保存逻辑 ---
+            const expirationTime = Date.now() + (tokenInfo.expires_in * 1000);
+            const msAuthData = { userInfo, tokenInfo, expirationTime };
+            chrome.storage.sync.set({ msAuth: msAuthData }, () => {
+              console.log('Microsoft auth data saved.');
+            });
+            // --- 保存逻辑结束 ---
+
             const user_info = userInfo.userPrincipalName || userInfo.displayName;
-            // console.log("成功获取微软用户信息:", user, userInfo);
-            // 在这里更新你的终端页面
             print(`Welcome, ${user_info}`, "success");
             user = user_info;
             update_user_path();
@@ -184,14 +188,16 @@ async function loginWithMicrosoft() {
             done();
         })
         .catch(error => {
+            // 确保不会因为我们中断链条而报错
+            if (typeof error === 'string') return; 
+            
             console.error("An Unknown Error occurred:", error);
-            print("An Unknown Error occurred: " + error.message, "error");
+            print("An Unknown Error occurred: " + (error.message || error), "error");
             print("");
             done();
         });
     });
 }
-
 // 调用函数
 // loginWithMicrosoft();
 
@@ -563,12 +569,16 @@ const commands = {
     else {
       print(`Unable to change default search engine: ${arg} is not supported.`, "error");
     }
+    saveDefaultSettings();
 
   },
   mslogin: () => {
     print("Logging in with Microsoft");
     awaiting();
     loginWithMicrosoft();
+  },
+  mslogout: () => {
+    logoutWithMicrosoft();
   },
   help: () => {
     print("Commands Available:");
@@ -635,6 +645,16 @@ function parseCommandLine(input) {
   }
   return { command, args, options };
 }
+
+function logoutWithMicrosoft() {
+  chrome.storage.sync.remove('msAuth', () => {
+      user = "";
+      update_user_path();
+      print("Logged out from Microsoft.", "success");
+      print("");
+      done();
+    });
+  }
 
 async function ping_func(url, options) {
   print("");
@@ -902,6 +922,90 @@ function done() {
   }
 }
 
+// SETTINGS 
+function saveDefaultSettings() {
+  const settings = {
+    default_search_engine: default_search_engine,
+    default_mode: default_mode,
+  };
+  chrome.storage.sync.set({ settings });
+}
+
+function saveCommandHistory() {
+  chrome.storage.sync.set({ commandHistory: previousCommands });
+}
+
+async function refreshMicrosoftToken(refreshToken) {
+  print("Microsoft session token expired. Attempting to refresh...", "info");
+  const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+  const params = new URLSearchParams();
+  params.append('client_id', 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'); // 您的客户端ID
+  params.append('scope', 'https://graph.microsoft.com/User.Read offline_access');
+  params.append('refresh_token', refreshToken);
+  params.append('grant_type', 'refresh_token');
+
+  try {
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    const tokenInfo = await response.json();
+
+    if (tokenInfo.error) {
+      throw new Error(tokenInfo.error_description);
+    }
+
+    // 刷新成功，保存新的Token和用户信息
+    const newExpirationTime = Date.now() + (tokenInfo.expires_in * 1000);
+    // 从旧的存储中获取用户信息，因为刷新流程不返回这个
+    const data = await chrome.storage.sync.get('msAuth');
+    const msAuthData = {
+      userInfo: data.msAuth.userInfo,
+      tokenInfo: tokenInfo,
+      expirationTime: newExpirationTime,
+    };
+
+    await chrome.storage.sync.set({ msAuth: msAuthData });
+    print("Session refreshed successfully.", "success");
+    return msAuthData;
+
+  } catch (error) {
+    print(`Session refresh failed: ${error.message}. Please log in again.`, "error");
+    // 清除无效的登录信息
+    await chrome.storage.sync.remove('msAuth');
+    return null;
+  }
+}
+
+// Load all settings 
+async function loadSettings() {
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth']);
+
+  if (data.settings) {
+    default_mode = data.settings.default_mode ?? false;
+    default_search_engine = data.settings.default_search_engine ?? "google";
+  }
+
+  if (data.commandHistory) {
+    previousCommands.push(...data.commandHistory);
+  }
+
+  if (data.msAuth && data.msAuth.tokenInfo) {
+    let currentAuth = data.msAuth;
+    if (Date.now() > currentAuth.expirationTime) {
+      // Token 过期，尝试刷新
+      currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
+    }
+
+    if (currentAuth) {
+      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+      user = user_info;
+      print(`Welcome back, ${user_info}`, "success");
+    }
+  }
+}
+
 function clearOutput() {
   output.innerHTML = "";
   // Welcome message can be re-added if desired, or keep it minimal
@@ -1012,6 +1116,12 @@ document.body.addEventListener("keydown", e => {
     } else { // If buffer is empty, print prompt again (classic ^C behavior)
         print(full_path); // Just print the prompt
     }
+    return;
+  }
+
+  if (e.key.toLowerCase() === "d" && control_cmd) {
+    e.preventDefault();
+    logoutWithMicrosoft();
     return;
   }
   
@@ -1211,6 +1321,7 @@ if (e.key === "Tab") {
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
          previousCommands.push(buffer);
          if (previousCommands.length > 50) previousCommands.shift(); // Limit history size
+         saveCommandHistory(); // Save command history to storage
     }
     previousCommandIndex = 0; // Reset history index
 
@@ -1373,10 +1484,11 @@ window.addEventListener("resize", () => {
   resizeTimeout = setTimeout(updateLinesOnResize, 150); // Debounce resize
 });
 
-window.onload = () => {
+window.onload = async () => {
   // No explicit body focus, let browser decide or user click.
   // typedText.focus() will be called by done() or click handler.
   updateCharacterWidth(); // Initial calculation
+  await loadSettings(); // Load settings and user info
   welcomeMsg();
   // updateInputDisplay(); // Called by done()
   done(); // Initial setup of prompt and input display
