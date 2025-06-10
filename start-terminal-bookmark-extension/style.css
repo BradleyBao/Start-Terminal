@@ -98,6 +98,11 @@ body {
   color: #ffffff;
 }
 
+.output-exec {
+  color: #00a000; /* Green for executables */
+
+}
+
 .output-success {
   color: #00ff00;
 }
@@ -129,6 +134,7 @@ body {
 .cursor { /* This is the block cursor '█' */
   display: inline-block; /* Will be toggled by JS */
   width: 1ch; /* or use font-metric based width if possible */
+  line-height: 1.1;
   /* background-color: rgb(255, 255, 255); */
   /* animation: blink 1s steps(2, start) infinite; */
   /* margin-left: -1px; /* Optional: slight adjustment if needed */

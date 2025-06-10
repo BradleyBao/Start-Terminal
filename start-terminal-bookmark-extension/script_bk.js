@@ -12,7 +12,7 @@ var commanding = false;
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
-let default_mode = true;
+let default_mode = false;
 let default_search_engine = "google";
 
 let user = ""
@@ -23,11 +23,6 @@ let root = null;
 let path = [];
 
 let full_path = null;
-
-chrome.identity.getProfileUserInfo(userInfo => {
-  // userInfo.email
-  user = userInfo.email;
-});
 
 chrome.bookmarks.getTree(bookmarkTree => {
   get_fav(bookmarkTree);
@@ -51,35 +46,238 @@ function update_user_path() {
   promptSymbol.textContent = full_path;
 }
 
+// =================================================================
+// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
+// =================================================================
+async function loginWithMicrosoft() {
+    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
+
+    // --- PKCE Help Function ---
+    // 1. 创建一个随机字符串作为 code_verifier
+    function generateCodeVerifier() {
+        const randomBytes = new Uint8Array(32);
+        crypto.getRandomValues(randomBytes);
+        return btoa(String.fromCharCode.apply(null, randomBytes))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    // 2. 用 SHA-256 哈希 verifier 来创建 code_challenge
+    async function generateCodeChallenge(verifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(verifier);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuffer)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+    // --- PKCE Help Function ---
+
+
+    // 1. Generate PKCE code_verifier and code_challenge
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+
+    // 2. Construct Microsoft Authorization URL
+    const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
+    authUrl.searchParams.append('client_id', MS_CLIENT_ID);
+    authUrl.searchParams.append('response_type', 'code'); // <--- 关键变化
+    authUrl.searchParams.append('redirect_uri', chrome.identity.getRedirectURL());
+    authUrl.searchParams.append('scope', 'https://graph.microsoft.com/User.Read');
+    authUrl.searchParams.append('response_mode', 'query'); // <--- 推荐使用 'query'
+    // Add PKCE parameters
+    authUrl.searchParams.append('code_challenge', codeChallenge);
+    authUrl.searchParams.append('code_challenge_method', 'S256');
+
+    console.log("Opening URL:", authUrl.href);
+    print("Opening Microsoft login page...", "info");
+
+    // 3. Start Web Auth (code)
+    chrome.identity.launchWebAuthFlow({
+        url: authUrl.href,
+        interactive: true
+    }, (redirectUrl) => {
+        if (chrome.runtime.lastError || !redirectUrl) {
+            console.error("Auth Failed:", chrome.runtime.lastError?.message);
+            
+            print("Auth Failed: " + (chrome.runtime.lastError?.message || "Unknown Error"), "error");
+            print("");
+
+            done();
+            return;
+        }
+        
+        // 4. 从重定向URL中解析出 "code"
+        const url = new URL(redirectUrl);
+        const code = url.searchParams.get('code');
+
+        if (!code) {
+            // 这里处理 redirectUrl 中返回的错误信息
+            const error = url.searchParams.get('error_description') || "Failed to get code";
+            console.error("Failed to get code:", error);
+            print("Failed to get code: " + error, "error");
+            // 可以在此处向用户显示更友好的错误信息
+            if (error.includes("'token' is disabled")) {
+                console.error("Failed to login, please contact the developer.");
+                print("Failed to login, please contact the developer.", "error");
+            }
+            print("");
+            done();
+            return;
+        }
+
+        console.log("Successfully get code");
+        print("Successfully get code", "success");
+
+        // 5. Exchange to Access Token
+        const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+        const params = new URLSearchParams();
+        params.append('client_id', MS_CLIENT_ID);
+        params.append('scope', 'https://graph.microsoft.com/User.Read');
+        params.append('code', code);
+        params.append('redirect_uri', chrome.identity.getRedirectURL());
+        params.append('grant_type', 'authorization_code');
+        // Send verifier to verify
+        params.append('code_verifier', codeVerifier);
+
+        fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params
+        })
+        .then(response => response.json())
+        .then(tokenInfo => {
+            if (tokenInfo.error) {
+                console.error("Token Exchange Failed:", tokenInfo.error_description);
+                print("Token Exchange Failed: " + tokenInfo.error_description, "error");
+                print("");
+                done();
+                return Promise.reject(tokenInfo.error_description); // 中断链条
+            }
+            
+            const accessToken = tokenInfo.access_token;
+            console.log("Successfully get Access Token!");
+            print("Successfully get Access Token", "success");
+
+            // 6. 使用 Access Token 获取用户信息
+            return fetch('https://graph.microsoft.com/v1.0/me', {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            })
+            .then(response => response.json())
+            .then(userInfo => ({ userInfo, tokenInfo })); // 将两个结果一起向下传递
+        })
+        .then(({ userInfo, tokenInfo }) => { // 接收包含两个信息的对象
+            if (userInfo.error) {
+                console.error("Failed to get user info:", userInfo.error.message);
+                print("Failed to get user info: " + userInfo.error.message, "error");
+                return;
+            }
+
+            // --- 这是关键的保存逻辑 ---
+            const expirationTime = Date.now() + (tokenInfo.expires_in * 1000);
+            const msAuthData = { userInfo, tokenInfo, expirationTime };
+            chrome.storage.sync.set({ msAuth: msAuthData }, () => {
+              console.log('Microsoft auth data saved.');
+            });
+            // --- 保存逻辑结束 ---
+
+            const user_info = userInfo.userPrincipalName || userInfo.displayName;
+            print(`Welcome, ${user_info}`, "success");
+            user = user_info;
+            update_user_path();
+            print("");
+            done();
+        })
+        .catch(error => {
+            // 确保不会因为我们中断链条而报错
+            if (typeof error === 'string') return; 
+            
+            console.error("An Unknown Error occurred:", error);
+            print("An Unknown Error occurred: " + (error.message || error), "error");
+            print("");
+            done();
+        });
+    });
+}
+// 调用函数
+// loginWithMicrosoft();
+
+// Helper function to set caret position in contenteditable elements
+function setCaretAtOffset(element, offset) {
+    const sel = window.getSelection();
+    if (!sel) return; // No selection object
+    const range = document.createRange();
+    let charCount = 0;
+    let found = false;
+
+    function traverseNodes(node) {
+        if (found) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+            const nextCharCount = charCount + node.textContent.length;
+            if (offset >= charCount && offset <= nextCharCount) {
+                range.setStart(node, offset - charCount);
+                found = true;
+            }
+            charCount = nextCharCount;
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            if (offset === charCount && node.childNodes.length === 0) {
+                range.setStart(node, 0);
+                found = true;
+                return;
+            }
+            for (let i = 0; i < node.childNodes.length && !found; i++) {
+                traverseNodes(node.childNodes[i]);
+            }
+        }
+    }
+    
+    // Ensure element has focus before manipulating selection if it's the intended target
+    if(document.activeElement !== element && (element === typedText || element.contains(document.activeElement))) {
+      element.focus();
+    }
+
+    traverseNodes(element);
+
+    if (found) {
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    } else { // Fallback: if specific offset not found, place at end or start
+        try {
+            range.selectNodeContents(element);
+            range.collapse(offset > 0); // true for start, false for end
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } catch (e) {
+            // console.warn("Fallback caret setting failed", e);
+        }
+    }
+     // Re-focus if not already focused, helps IME
+    if (document.activeElement !== element) {
+        element.focus();
+    }
+}
+
+
 function listChildren() {
   if (!current.children) {
-    print("Not a directory")
-    return ""
+    print("Not a directory");
+    return;
   }
 
-  let printout = "";
-  let index_child = 0;
-
   current.children.forEach((child, index) => {
-    if (child.children) {
-      // If last child 
-      if (index_child === current.children.length - 1) {
-        printLine(`${child.title}`, "folder", true); // Use true to indicate end of line
+    const isLastChild = (index === current.children.length - 1);
+
+    if (child.children) { // 这是一个文件夹
+      printLine(`${child.title}`, "folder", isLastChild);
+    } else { // 这是一个书签（文件）
+      // 检查是否为 "executable" (javascript: URL)
+      if (child.url && child.url.startsWith("javascript:")) {
+        printLine(`${child.title}`, "exec", isLastChild);
       } else {
-        printLine(`${child.title}`, "folder");
-      }
-    } else {
-      // If last child
-      if (index_child === current.children.length - 1) {
-        printLine(`${child.title}`, "file", true); // Use true to indicate end of line
-      } else {
-        // If not last child, just print the file name
-        printLine(`${child.title}`, "file");
+        printLine(`${child.title}`, "file", isLastChild);
       }
     }
-    index_child++;
-
-  })
+  });
 }
 
 const previousCommands = [];
@@ -88,7 +286,7 @@ let previousCommandIndex = 0;
 // Function to escape HTML special characters
 function escapeHtml(unsafe) {
     return unsafe
-         .replace(/&/g, "&amp;")
+         .replace(/&/g, "&amp;") // Ensure & is escaped first
          .replace(/</g, "&lt;")
          .replace(/>/g, "&gt;")
          .replace(/"/g, "&quot;")
@@ -98,23 +296,30 @@ function escapeHtml(unsafe) {
 // Function to update the input display (typedText and blockCursor)
 function updateInputDisplay() {
   if (isComposing) {
-    // During composition, blockCursor is generally hidden or IME handles cursor
-    // The compositionupdate handler will manage typedText.innerHTML
     blockCursor.style.display = "none";
     return;
   }
 
+  const currentActiveElement = document.activeElement;
+  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+
   if (cursorPosition === buffer.length) {
     typedText.textContent = buffer;
-    blockCursor.style.display = "inline-block"; // Show block cursor at the end
+    blockCursor.style.display = "inline-block";
   } else {
-    // Show highlighted char as cursor
-    const charAtCursor = buffer[cursorPosition] || ' '; // Use space if char is undefined (should not happen with correct logic)
+    const charAtCursor = buffer[cursorPosition] || ' ';
     typedText.innerHTML =
       escapeHtml(buffer.substring(0, cursorPosition)) +
       `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
       escapeHtml(buffer.substring(cursorPosition + 1));
-    blockCursor.style.display = "none"; // Hide block cursor when internal cursor is shown
+    blockCursor.style.display = "none";
+  }
+
+  // After updating display, ensure the browser's caret/selection is also at cursorPosition
+  // This helps with IME positioning consistency.
+  // Only set caret if typedText was focused or body (implying typedText should be focused)
+  if (typedTextIsFocused || currentActiveElement === document.body ) {
+      setCaretAtOffset(typedText, cursorPosition);
   }
 }
 
@@ -122,18 +327,18 @@ function updateInputDisplay() {
 // Function to measure character width
 function getMonospaceCharacterWidth() {
     const span = document.createElement('span');
-    span.textContent = ' ';
-    span.style.fontFamily = 'Consolas, monospace';
-    span.style.fontSize = '16px';
+    span.textContent = ' '; // Use a common character, 'M' or 'W' could also be good.
+    span.style.fontFamily = getComputedStyle(typedText).fontFamily || 'monospace';
+    span.style.fontSize = getComputedStyle(typedText).fontSize || '16px';
     span.style.visibility = 'hidden';
     span.style.position = 'absolute';
+    span.style.whiteSpace = 'pre'; // Important for accurate width of space
 
-    const parentElement = document.getElementById("output") || document.body;
-    parentElement.appendChild(span);
+    document.body.appendChild(span); // Append to body to ensure it's rendered
     const width = span.getBoundingClientRect().width;
-    parentElement.removeChild(span);
+    document.body.removeChild(span);
 
-    return width > 0 ? width : 8;
+    return width > 0 ? width : 8; // Fallback if width is 0
 }
 
 let CHARACTER_WIDTH = getMonospaceCharacterWidth();
@@ -142,43 +347,46 @@ function updateCharacterWidth() {
     CHARACTER_WIDTH = getMonospaceCharacterWidth();
 }
 
-function changeDir(name) {
-  name = name[0];
+function changeDir(nameParts) {
+  const name = nameParts[0]; // Expecting an array, take the first part as the target
+  if (!name) {
+    print("cd: missing operand", "error");
+    return;
+  }
+
   if (name === "..") {
     if (path.length > 1) {
       path.pop();
       current = path[path.length - 1];
-    } else {
-
     }
     update_user_path();
     return;
   }
 
-  let index_path = path.map(p => p.title || "/home").join("/") || "/";
-
   const target = findChildByTitle(current.children || [], name);
-  if (target) {
+  if (target && target.children) { // Ensure it's a directory
     current = target;
     path.push(current);
+  } else if (target && !target.children) {
+    print(`cd: ${name}: Not a directory`, "error");
   } else {
-    print(`cd: Cannot find the path ${index_path}/${name}.`, "error");
+    print(`cd: ${name}: No such file or directory`, "error");
   }
 
   update_user_path();
-  buffer = "";
-  cursorPosition = 0;
-  updateInputDisplay(); // Clears visual input line
+  // buffer = ""; // Keep buffer for usability if cd fails
+  // cursorPosition = 0;
+  // updateInputDisplay();
 }
 
 function findChildByTitle(children, title) {
-  return children.find(child => child.title === title && child.children);
+  return children.find(child => child.title === title && child.children); // Specifically for directories
 }
 
-function findChildByTitleFile(children, title) {
-  return children.find(child => child.title === title && !child.children);
-
+function findChildByTitleFileOrDir(children, title) { // For general lookup (files or dirs)
+  return children.find(child => child.title === title);
 }
+
 
 const commands = {
   google: (args, options) => {
@@ -281,7 +489,7 @@ const commands = {
     // if (options.t) result += " continuously";
     // if (options.n) result += ` ${options.n} times`;
     ping_func(args[0], options);
-    awating();
+    awaiting();
     // return result;
   },
   locale: (args, options) => {
@@ -309,6 +517,9 @@ const commands = {
   clear: (args, options) => {
     clearOutput();
   },
+  cls: (args, options) => {
+    clearOutput();
+  },
   ls: (args, options) => {
     listChildren();
   },
@@ -322,6 +533,147 @@ const commands = {
     return path.map(p => p.title || "/home").join("/") || "/";
   },
   gh: () => location.href = "https://github.com",
+  mkdir: (args) => {
+    if (args.length === 0) {
+      return "Usage: mkdir <directory_name>";
+    }
+    const dirName = args.join(" "); // Folder name space allowed
+
+    // Check already exists
+    const existing = findChildByTitle(current.children || [], dirName);
+    if (existing) {
+      return `mkdir: cannot create directory '${dirName}': File exists`;
+    }
+
+    awaiting(); // waiting for command to finish
+    chrome.bookmarks.create(
+      {
+        parentId: current.id,
+        title: dirName,
+      },
+      (newFolder) => {
+        if (chrome.runtime.lastError) {
+          print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
+        } else {
+          print(`Directory '${newFolder.title}' created.`);
+          // Refresh current children
+          chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+              current = results[0];
+            }
+          });
+        }
+        print("");
+        done();
+      }
+    );
+  },
+  rm: (args, options) => {
+    if (args.length === 0) {
+      return "Usage: rm [-r] [-f] <name>";
+    }
+    const targetName = args.join(" "); // 支持带空格的名称
+
+    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+
+    // 情况1: 目标不存在
+    if (!target) {
+      if (options.f) return; // -f (force) 选项：如果不存在，则静默处理，不做任何事
+      print(`rm: cannot remove '${targetName}': No such file or directory`, "error");
+      return;
+    }
+
+    const isDirectory = !!target.children;
+    const isRecursive = !!options.r;
+
+    console.log(isDirectory, isRecursive);
+
+    // 情况2: 使用 -r (递归删除)
+    if (isRecursive) {
+      // rm -r 可以删除文件或目录
+      awaiting();
+      // chrome.bookmarks.removeTree 会删除一个文件夹及其所有子内容
+      // 对单个书签使用它，效果和 chrome.bookmarks.remove 一样
+      chrome.bookmarks.removeTree(target.id, () => {
+        if (chrome.runtime.lastError) {
+          print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
+        } else {
+          print(`Recursively removed '${targetName}'.`);
+          // 刷新当前节点的子节点列表以保持同步
+          chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+              current = results[0];
+            }
+          });
+        }
+        print("");
+        done();
+      });
+      return; // 异步处理，提前返回
+    }
+
+    // 情况3: 不使用 -r
+    if (isDirectory) {
+      // 如果是目录但没有-r选项，则必须为空才能删除
+      if (target.children.length > 0) {
+        return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
+      }
+      // 如果是空目录，则可以删除
+    }
+
+    // 执行删除 (单个书签 或 空目录)
+    awaiting();
+    chrome.bookmarks.remove(target.id, () => {
+      if (chrome.runtime.lastError) {
+        print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
+      } else {
+        print(`Removed '${targetName}'.`);
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+              current = results[0];
+            }
+          });
+      }
+      print("");
+      done();
+    });
+  },
+  rmdir: (args) => {
+    if (args.length === 0) {
+      return "Usage: rmdir <directory_name>";
+    }
+    const dirName = args.join(" ");
+    
+    const target = findChildByTitleFileOrDir(current.children || [], dirName);
+
+    if (!target) {
+      return `rmdir: failed to remove '${dirName}': No such directory`;
+    }
+    if (!target.children) { // 这是一个书签文件
+        return `rmdir: failed to remove '${dirName}': Not a directory`;
+    }
+    if (target.children.length > 0) {
+      return `rmdir: failed to remove '${dirName}': Directory not empty`;
+    }
+
+    awaiting();
+    chrome.bookmarks.remove(target.id, () => {
+      if (chrome.runtime.lastError) {
+        print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
+      } else {
+        print(`Removed directory '${dirName}'.`);
+        // 刷新当前节点的子节点列表
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+              current = results[0];
+            }
+        });
+      }
+      print("");
+      done();
+    });
+  },
+
   default: (args, options) => {
     // Change the default search engine
     if (args.length === 0) {
@@ -349,83 +701,109 @@ const commands = {
     else {
       print(`Unable to change default search engine: ${arg} is not supported.`, "error");
     }
+    saveDefaultSettings();
 
   },
+  mslogin: () => {
+    print("Logging in with Microsoft");
+    awaiting();
+    loginWithMicrosoft();
+  },
+  mslogout: () => {
+    logoutWithMicrosoft();
+  },
   help: () => {
-    print("Commands Available:");
-    print(" - google <query> [-b]: Search Google.");
-    print(" - youtube <query> [-b]: Search YouTube (aliased as 'yt')."); // Added alias info
-    print(" - bing <query> [-b]: Search Bing.");
-    print(" - baidu <query> [-b]: Search Baidu.");
-    print(" - bilibili <query> [-b]: Search Bilibili.");
-    print(" - spotify <query> [-b]: Search Spotify.");
-    print(" - ping <host> [-t] [-n <count>]: Ping a host.");
-    print(" - goto <url> [-b]: Navigate to URL.");
-    print(" - date: Show current date and time.");
-    print(" - clear: Clear terminal output.");
-    print(" - gh: Navigate to GitHub.");
-    print(" - help: Show this help message.");
     print("");
-    print("Default Search Engine:");
-    print(`  - Current: ${default_search_engine}`);
-    print("  - Change with: default <search engine> (google, bing, baidu)");
-    print("  - Turn on / off default mode with: default on / off");
+    print("--- Terminal Help ---", "highlight");
     print("");
-    print("Options:");
-    print("  -b: Open search results or URL in a new tab.");
-    print("  -t: (ping) Ping continuously.");
-    print("  -n <count>: (ping) Number of pings.");
+
+    print("Search Commands", "highlight");
+    print("  google <query> [-b]   - Search with Google.");
+    print("  bing <query> [-b]     - Search with Bing.");
+    print("  baidu <query> [-b]    - Search with Baidu.");
+    print("  yt <query> [-b]       - Search with YouTube.");
+    print("  bilibili <query> [-b] - Search with Bilibili.");
+    print("  spotify <query> [-b]  - Search with Spotify.");
     print("");
-    print("Navigation:");
-    print("  ArrowUp/ArrowDown: Cycle through command history.");
-    print("  ArrowLeft/ArrowRight: Move cursor in the current command line.");
-    print("  Ctrl+C: Interrupt running command or clear current input line.");
-    return " ";
-  }
+
+    print("Navigation & Bookmarks", "highlight");
+    print("  goto <url> [-b]       - Navigate to a specific URL.");
+    print("  gh                    - Navigate to GitHub.");
+    print("  ls                    - List bookmarks and folders in current directory.");
+    print("  cd <folder>           - Change directory to a bookmark folder.");
+    print("  cd ..                 - Go to parent directory.");
+    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
+    print("  pwd                   - Show current bookmark path.");
+    print("");
+
+    print("Account Management", "highlight");
+    print("  mslogin               - Log in with a Microsoft account.");
+    print("  mslogout              - Log out from Microsoft account.");
+    print("");
+
+    print("Utility Commands", "highlight");
+    print("  ping <host> [-n <count>] [-t] - Ping a host.");
+    print("  date                  - Show current date and time.");
+    print("  clear (or cls)        - Clear the terminal screen.");
+    print("  locale                - Show browser language settings.");
+    print("");
+
+    print("Settings & Features", "highlight");
+    print("  default <engine|on|off> - Set default search engine or toggle default mode.");
+    print("  * All settings, command history, output history, and login status are saved automatically.");
+    print("");
+
+    print("Command Options", "highlight");
+    print("  -b                    - Open search results or URL in a new background tab.");
+    print("  -n <count>            - (ping) Number of pings to send.");
+    print("  -t                    - (ping) Ping continuously until interrupted (Ctrl+C).");
+    print("");
+    return " "; // 返回一个空格以打印一个空行
+  },
 };
 
-commands.yt = commands.youtube; // Alias for youtube
+commands.yt = commands.youtube;
 
 function parseCommandLine(input) {
-  const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map(t => t.replace(/^"|"$/g, ""));
-  if (!tokens || tokens.length === 0) return null;
+  const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map(t => t.replace(/^"|"$/g, "")) || [];
+  if (tokens.length === 0) return null;
 
   const command = tokens.shift();
   const args = [];
   const options = {};
 
-  const optionRequiresValue = {
-    ping: ["n"],
-    google: [],
-    yt: [],
-    youtube: [],
-    bing: [],
-    baidu: [],
-    bilibili: [],
-    spotify: [],
-    goto: []
+  const optionRequiresValue = { // Define which options expect a value
+      ping: ["n"],
+      // Add other commands and their value-expecting options if any
   };
+  const commandSpecificOptionValues = optionRequiresValue[command] || [];
 
-  const requiresValue = optionRequiresValue[command] || [];
-
-  while (tokens.length > 0) {
-    const token = tokens.shift();
-    if (token.startsWith("-")) {
-      const name = token.replace(/^-+/, '');
-      const expectsValue = requiresValue.includes(name);
-      const next = tokens[0];
-
-      if (expectsValue && next && !next.startsWith("-")) {
-        options[name] = tokens.shift();
+  for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (token.startsWith("-")) {
+          const optName = token.replace(/^-+/, "");
+          if (commandSpecificOptionValues.includes(optName) && tokens[i+1] && !tokens[i+1].startsWith("-")) {
+              options[optName] = tokens[i+1];
+              i++; // Skip next token as it's the value
+          } else {
+              options[optName] = true;
+          }
       } else {
-        options[name] = true;
+          args.push(token);
       }
-    } else {
-      args.push(token);
-    }
   }
   return { command, args, options };
 }
+
+function logoutWithMicrosoft() {
+  chrome.storage.sync.remove('msAuth', () => {
+      user = "";
+      update_user_path();
+      print("Logged out from Microsoft.", "success");
+      print("");
+      done();
+    });
+  }
 
 async function ping_func(url, options) {
   print("");
@@ -498,58 +876,6 @@ async function ping_func(url, options) {
 
   print("");
   done();
-}
-
-function print_inline(text, type = "info") {
-  const lineWidth = output.clientWidth;
-  const charWidth = CHARACTER_WIDTH;
-
-  const textStr = String(text);
-  const totalTextPixelWidth = textStr.length * charWidth;
-  let numSpaces = 0;
-
-  if (charWidth === 0) {
-    // fallback: just append new inline span
-    const span = document.createElement('span');
-    span.className = `output-inline output-${type}`;
-    span.textContent = textStr;
-    output.appendChild(span);
-    window.scrollTo(0, document.body.scrollHeight);
-    return;
-  }
-
-  // 计算补齐空格数（用于对齐）
-  if (totalTextPixelWidth < lineWidth) {
-    numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
-  } else {
-    const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
-    if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
-      numSpaces = 0;
-    } else {
-      numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
-    }
-  }
-
-  numSpaces = Math.max(0, numSpaces);
-  const filledText = " ".repeat(numSpaces);
-
-  // 尝试获取最后一行
-  let lastLine = output.lastElementChild;
-
-  // 如果没有最后一行或最后一行不是 inline 输出，就新建一行
-  if (!lastLine || !lastLine.classList.contains("output-line-inline")) {
-    lastLine = document.createElement("div");
-    lastLine.className = `output-line output-line-inline output-${type}`;
-    output.appendChild(lastLine);
-  }
-
-  // 追加 inline span 到当前行
-  const span = document.createElement("span");
-  span.className = `output-inline output-${type}`;
-  span.textContent = textStr + filledText;
-  lastLine.appendChild(span);
-
-  window.scrollTo(0, document.body.scrollHeight);
 }
 
 
@@ -631,7 +957,9 @@ function printLine(text, type = "info", endLine = false) {
     }
     numSpaces = Math.max(0, numSpaces);
     const filledText = " ".repeat(numSpaces);
-    lineDiv.textContent = textStr + filledText + "\t"; // Add spaces to fill the line
+    // Remove filled text last space
+    // filledText = filledText.substring(0, filledText.length);
+    lineDiv.textContent = textStr + filledText; // Add spaces to fill the line
   } else {
   // If endline is false, just add a tab
   // Add a tab character to the end of the text
@@ -643,28 +971,52 @@ function printLine(text, type = "info", endLine = false) {
   window.scrollTo(0, document.body.scrollHeight);
 }
 
+// Function to rewrap a single line based on current width and character width
+function rewrapLine(lineDiv) {
+    if (CHARACTER_WIDTH === 0) return; // Avoid division by zero
+
+    const rawText = lineDiv.getAttribute('data-raw-text');
+    if (rawText === null) return;
+
+    const textStr = String(rawText);
+    const lineWidthChars = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+
+    if (textStr.length <= lineWidthChars) {
+        lineDiv.textContent = textStr; // No wrapping needed
+    } else {
+        // Simple wrapping logic (can be improved for word boundaries)
+        let wrappedText = "";
+        for (let i = 0; i < textStr.length; i += lineWidthChars) {
+            wrappedText += textStr.substring(i, Math.min(i + lineWidthChars, textStr.length)) + "\n";
+        }
+        lineDiv.textContent = wrappedText.trimEnd(); // Use textContent for pre-wrap to respect newlines
+    }
+}
+
+
 function processCommand(input) {
-  print(`${full_path} ${input}`); // Echo command with padding
+  const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
+  print(`${full_path} ${displayInput}`); // Echo command
+
   const parsed = parseCommandLine(input);
   if (!parsed) {
-      print("Invalid command syntax."); // Provide more specific feedback
+      print("Invalid command syntax.", "error");
       return;
   }
 
-  // If start with ./
   if (input.startsWith("./")) {
     let name = input.substring(2).trim();
-    // Get the target child
-    const target = findChildByTitleFile(current.children || [], name);
-    if (target) {
-      // If target is a file, open it
-      if (target.url) {
-        if (target.url.startsWith("javascript:")) {
-          print(`Executing JavaScript code from ${target.title} is not allowed for security reasons.`, "error");
-          return;
-        }
-        location.href = target.url; // Navigate to the URL
+    const target = findChildByTitleFileOrDir(current.children || [], name); // Use generalized finder
+    if (target && target.url && !target.children) { // Ensure it's a bookmark (file) and has a URL
+      if (target.url.startsWith("javascript:")) {
+        print(`Executing JavaScript from bookmarks is disabled for security.`, "error");
+        return;
       }
+      location.href = target.url;
+    } else if (target && target.children) {
+      print(`${name}: Is a directory. Use 'cd' to navigate.`, "info");
+    } else {
+      print(`${name}: No such file or bookmark.`, "error");
     }
     return;
   }
@@ -676,53 +1028,140 @@ function processCommand(input) {
     const result = action(args, options);
     if (typeof result === "string") {
         print(result);
-    } else if (typeof result === "boolean" && result === true) {
-      // For commands that navigate or start async ops handled by awating()
-      // awating(); // awating() should be called by async commands like ping
-    } else if (typeof result === "boolean" && result === false) {
-      print(`Command '${command}' failed execute or returned false.`);
+    } else if (result === false) {
+        // Command handles its own output or is async
+    } else if (result === true) {
+        // Typically for navigation commands, no specific output needed here
     }
-    // If action is async (like ping), it should handle its own "done" state.
   } else {
     if (default_mode) {
-      const fix_action = commands[default_search_engine]
-      args.unshift(command);
-      const fix_result = fix_action(args, options);
-      return;
+      const defaultAction = commands[default_search_engine];
+      if (defaultAction) {
+        // Prepend the "unknown command" as the first argument to the search query
+        const searchQueryArgs = [command, ...args];
+        defaultAction(searchQueryArgs, options);
+      } else {
+         print(`Default search engine '${default_search_engine}' not found.`, "error");
+         print(`Unknown command: '${command}' (try 'help')`, "error");
+      }
+    } else {
+      print(`Unknown command: '${command}' (try 'help')`, "error");
     }
-
-    print(`Unknown command: '${command}' (try 'help')`, "error");
-    print("");
+  }
+  if (!commanding) { // If not an async command like ping
+    print(""); // Add a blank line for spacing after most command outputs
   }
 }
 
-function awating() {
-  typedText.innerHTML = ""; // Clear input area
-  blockCursor.style.display = "none"; // Hide block cursor
+function awaiting() {
+  typedText.innerHTML = "";
+  // blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
 }
 
 function done() {
   promptSymbol.style.display = "inline";
-  promptSymbol.textContent = full_path + " ";
-  // buffer might contain partial input if a command was interrupted
-  // updateInputDisplay will render it correctly with cursorPosition
+  // promptSymbol.textContent = full_path + " "; // update_user_path handles this or it's set on load
+  update_user_path(); // Ensure prompt is fresh
   updateInputDisplay();
-  document.body.focus();
+  // No need to explicitly focus body, focus should be managed to typedText
+  if (!isComposing) { // Only focus if not in middle of IME
+    typedText.focus();
+    setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
+  }
+}
+
+// SETTINGS 
+function saveDefaultSettings() {
+  const settings = {
+    default_search_engine: default_search_engine,
+    default_mode: default_mode,
+  };
+  chrome.storage.sync.set({ settings });
+}
+
+function saveCommandHistory() {
+  chrome.storage.sync.set({ commandHistory: previousCommands });
+}
+
+async function refreshMicrosoftToken(refreshToken) {
+  print("Microsoft session token expired. Attempting to refresh...", "info");
+  const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+  const params = new URLSearchParams();
+  params.append('client_id', 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'); // 您的客户端ID
+  params.append('scope', 'https://graph.microsoft.com/User.Read offline_access');
+  params.append('refresh_token', refreshToken);
+  params.append('grant_type', 'refresh_token');
+
+  try {
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    const tokenInfo = await response.json();
+
+    if (tokenInfo.error) {
+      throw new Error(tokenInfo.error_description);
+    }
+
+    // 刷新成功，保存新的Token和用户信息
+    const newExpirationTime = Date.now() + (tokenInfo.expires_in * 1000);
+    // 从旧的存储中获取用户信息，因为刷新流程不返回这个
+    const data = await chrome.storage.sync.get('msAuth');
+    const msAuthData = {
+      userInfo: data.msAuth.userInfo,
+      tokenInfo: tokenInfo,
+      expirationTime: newExpirationTime,
+    };
+
+    await chrome.storage.sync.set({ msAuth: msAuthData });
+    print("Session refreshed successfully.", "success");
+    return msAuthData;
+
+  } catch (error) {
+    print(`Session refresh failed: ${error.message}. Please log in again.`, "error");
+    // 清除无效的登录信息
+    await chrome.storage.sync.remove('msAuth');
+    return null;
+  }
+}
+
+// Load all settings 
+async function loadSettings() {
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth']);
+
+  if (data.settings) {
+    default_mode = data.settings.default_mode ?? false;
+    default_search_engine = data.settings.default_search_engine ?? "google";
+  }
+
+  if (data.commandHistory) {
+    previousCommands.push(...data.commandHistory);
+  }
+
+  if (data.msAuth && data.msAuth.tokenInfo) {
+    let currentAuth = data.msAuth;
+    if (Date.now() > currentAuth.expirationTime) {
+      // Token 过期，尝试刷新
+      currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
+    }
+
+    if (currentAuth) {
+      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+      user = user_info;
+      print(`Welcome back, ${user_info}`, "success");
+    }
+  }
 }
 
 function clearOutput() {
   output.innerHTML = "";
-  buffer = "";
-  cursorPosition = 0;
-  updateInputDisplay(); // Clears visual input line
-  previousCommands.length = 0;
-  previousCommandIndex = 0;
-  // done(); // done() might be redundant if updateInputDisplay covers it
-  promptSymbol.style.display = "inline"; // Ensure prompt is visible
-  promptSymbol.textContent = full_path + " ";
-  blockCursor.style.display = "inline-block"; // Ensure cursor is visible
-  document.body.focus();
+  // Welcome message can be re-added if desired, or keep it minimal
+  // welcomeMsg();
+  // No need to reset buffer/cursor here as it's for visual output
+  // Buffer clearing is handled by Enter key logic
+  done(); // Redraw prompt and input display
 }
 
 
@@ -730,24 +1169,28 @@ function clearOutput() {
 document.body.addEventListener("keydown", e => {
   if (e.key === "Control" || e.key === "Meta") {
     control_cmd = true;
-    // e.preventDefault(); // Allow copy/paste shortcuts
     return;
   }
 
-  if (commanding && e.key !== "c" && !(e.key === "Control" || e.key === "Meta")) { // if a command is running, only allow Ctrl+C
-     if (control_cmd && e.key === "c") {
-        // interrupt will be handled below
-     } else {
-        // e.preventDefault(); // Stop other keys from interfering
-        return;
-     }
+  if (commanding) { // If a command is running
+    if (control_cmd && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        interrupt();
+    } else if (e.key !== "Control" && e.key !== "Meta") { // Allow modifier keys
+        // e.preventDefault(); // Optionally prevent other input during command execution
+    }
+    return; // Most keys ignored during command execution
   }
 
 
   if (e.key === "ArrowUp") {
     e.preventDefault();
-    if (previousCommands.length > 0 && previousCommandIndex > -previousCommands.length) {
-      previousCommandIndex--;
+    if (previousCommands.length > 0) {
+      if (previousCommandIndex === 0 && buffer.length > 0) {
+          // If currently typing something new, save it as a draft before navigating history
+          // This behavior can be refined. For now, simple history navigation.
+      }
+      previousCommandIndex = Math.max(-previousCommands.length, previousCommandIndex - 1);
       buffer = previousCommands.at(previousCommandIndex) || "";
       cursorPosition = buffer.length;
       updateInputDisplay();
@@ -757,10 +1200,13 @@ document.body.addEventListener("keydown", e => {
   if (e.key === "ArrowDown") {
     e.preventDefault();
     if (previousCommands.length > 0 && previousCommandIndex < 0) {
-        previousCommandIndex++;
-        buffer = previousCommands.at(previousCommandIndex) || "";
-         if (previousCommandIndex === 0) buffer = "";
-    } else {
+        previousCommandIndex = Math.min(0, previousCommandIndex + 1);
+        if (previousCommandIndex === 0) {
+            buffer = ""; // Or restore a draft if implemented
+        } else {
+            buffer = previousCommands.at(previousCommandIndex) || "";
+        }
+    } else { // At the "bottom" of history (or no history), clear buffer
         buffer = "";
     }
     cursorPosition = buffer.length;
@@ -768,138 +1214,314 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "ArrowLeft") {
-    e.preventDefault();
     if (!isComposing && cursorPosition > 0) {
+      e.preventDefault();
       cursorPosition--;
-
       updateInputDisplay();
-    }
+    } // Allow default if composing for IME navigation
     return;
   }
   if (e.key === "ArrowRight") {
-    e.preventDefault();
     if (!isComposing && cursorPosition < buffer.length) {
+      e.preventDefault();
       cursorPosition++;
-
       updateInputDisplay();
-    }
+    } // Allow default if composing
     return;
   }
 
+  // Copy: Ctrl + Shift + C or Cmd + Shift + C
+  if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+    e.preventDefault();
+    // Get Selected Text
+    const selection = window.getSelection();
+    // remove white spaces after last non-space character and before \n), not only the space of the last line, but every line
+    const selectedText = selection.toString()
+      .split('\n')
+      .map(line => line.replace(/\s+$/, ''))
+      .join('\n');
+    if (selectedText) {
+      navigator.clipboard.writeText(selectedText).then(() => {
+        // print("Copied to clipboard: " + selectedText, "success");
+      }).catch(err => {
+        // print("Failed to copy: " + err, "error");
+      });
+    } else {
+      // print("Nothing selected to copy.", "warning");
+    }
 
-  //! Special Command Keys
-  // Handle Ctrl+C for interruption or clearing line
+    // Unselect text after copying
+    selection.removeAllRanges();
+    return;
+  }
+
   if (e.key.toLowerCase() === "c" && control_cmd) {
     e.preventDefault();
-    if (commanding) {
-        interrupt();
-    } else if (buffer.trim() === "")
-    {
-      print(full_path);
-      buffer = "";
-      cursorPosition = 0;
-      updateInputDisplay();
-    }
-    else {
+    if (buffer.length > 0) {
         buffer = "";
         cursorPosition = 0;
-        print(`${full_path} ${typedText.textContent}^C`); // Show current line content before clearing
+        print(`${full_path} ${typedText.textContent}^C`);
         updateInputDisplay();
+    } else { // If buffer is empty, print prompt again (classic ^C behavior)
+        print(full_path); // Just print the prompt
     }
     return;
   }
 
-  if (e.key.toLowerCase() === "h" && control_cmd) {
+  if (e.key.toLowerCase() === "d" && control_cmd) {
     e.preventDefault();
-    if (cursorPosition > 0) {
-      if (cursorPosition - 2 >= 0 && buffer.substring(cursorPosition - 2, cursorPosition).startsWith("^")) {
-        buffer = buffer.substring(0, cursorPosition - 2) + buffer.substring(cursorPosition);
-        cursorPosition -=2 ;
-      }
-      else {
-        buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
-        cursorPosition--;
-      }
+    logoutWithMicrosoft();
+    return;
+  }
+  
+  // --- Tab Autocompletion ---
+  // 替换你 script.js 文件中 document.body.addEventListener("keydown", e => { ... });
+// 内部的 if (e.key === "Tab") { ... } 代码块
 
-    }
-    updateInputDisplay();
-  }
-  else if (e.key.toLowerCase() === "i" && control_cmd) {
+if (e.key === "Tab") {
     e.preventDefault();
-  }
-  else if (e.key.length === 1 && control_cmd) {
-    e.preventDefault();
-    buffer += `^${e.key.toUpperCase()}`
-    cursorPosition += 2;
-    updateInputDisplay();
-  }
+    const relevantInput = buffer.substring(0, cursorPosition);
+    // 使用一个更简单的 split 来获取命令名，因为我们主要关心第一个 token 是否为特殊命令
+    const pre_parts = relevantInput.trimStart().split(/\s+/);
+    let commandName = pre_parts[0] || "";
 
-  // For other Ctrl combinations (like Ctrl+V for paste), allow browser default if not handled
-  if (control_cmd || e.metaKey || e.altKey) {
-    // Specifically allow paste (Ctrl+V or Cmd+V)
-    if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'v') {
-        // Let paste event handle it by not preventing default and not returning early
+    let prefixPath = ""; // 例如 "folder/"，在当前补全参数内部的路径前缀
+    let namePrefixToComplete = ""; // 例如 "myFile"，用户正在输入的文件/目录名部分
+    let currentContextChildren = current.children; // 默认为当前目录的子节点
+    let effectiveCommandType = ""; // 用于指导过滤逻辑："cd", "ls", "./"
+
+    // 这是当前正在处理的完整参数字符串
+    // 例如：如果输入是 "cd myfolder/sub"，那么这个字符串就是 "myfolder/sub"
+    let baseArgumentString = "";
+    // 这个参数字符串在 relevantInput 中的起始索引
+    let startOfBaseArgumentStringInRelevantInput = 0;
+
+    if (commandName.startsWith("./")) {
+        effectiveCommandType = "./";
+        startOfBaseArgumentStringInRelevantInput = "./".length; // "./" 之后的内内容是参数
+        baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
+
+        const lastSlashPos = baseArgumentString.lastIndexOf('/');
+        if (lastSlashPos > -1) {
+            prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
+            namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
+        } else {
+            prefixPath = ""; // 参数内没有路径前缀
+            namePrefixToComplete = baseArgumentString;
+        }
+        // getChildrenAtPath 应该返回 current 目录下，由 prefixPath 指定的子目录中的内容
+        currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
+
+    } else if (commandName === "cd" || commandName === "ls") {
+        effectiveCommandType = commandName;
+        // 确定参数部分的起始位置和内容
+        const commandEndIndex = relevantInput.indexOf(commandName) + commandName.length;
+        let potentialArgStringStart = relevantInput.substring(commandEndIndex); // 获取命令后的所有字符
+        
+        // 检查命令后是否有空格，确定参数的实际开始
+        const firstSpaceMatch = potentialArgStringStart.match(/^\s+/);
+        if (firstSpaceMatch) { // 如果命令后有空格
+            startOfBaseArgumentStringInRelevantInput = commandEndIndex + firstSpaceMatch[0].length;
+            baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
+
+            const lastSlashPos = baseArgumentString.lastIndexOf('/');
+            if (lastSlashPos > -1) {
+                prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
+                namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
+            } else {
+                prefixPath = "";
+                namePrefixToComplete = baseArgumentString;
+            }
+            
+            // 如果baseArgumentString以空格结尾 (例如 "cd mydir "), 那么实际是在补全 mydir 内部的内容
+            // 或者在 "cd myfolder/ " 之后补全
+            if (relevantInput.endsWith(" ")) {
+                 const trimmedBaseArg = baseArgumentString.trim();
+                 if (trimmedBaseArg !== "" && !trimmedBaseArg.endsWith("/")) {
+                    // prefixPath = trimmedBaseArg + "/";
+                 } else {
+                    prefixPath = trimmedBaseArg; // 可能是 "folder/" 或 ""
+                 }
+                 if (!prefixPath.endsWith("/") && prefixPath !== "") prefixPath += "/";
+
+                 namePrefixToComplete = "";
+            }
+
+        } else if (pre_parts.length === 1 && !potentialArgStringStart) {
+             // 只有命令本身，例如 "cd" 然后按 Tab，或者 "ls" 然后按 Tab
+             // 这种情况下，我们补全当前目录的内容，namePrefixToComplete 为空
+            namePrefixToComplete = "";
+            prefixPath = "";
+            startOfBaseArgumentStringInRelevantInput = cursorPosition; // 准备在光标处追加
+        } else {
+             // 命令后直接跟参数，无空格，例如 "cdmyparam" (这在您的解析器中可能不被视为 "cd" 命令加参数)
+             // 或者其他不符合 "命令 参数" 结构的情况
+             // 如果您的命令解析要求 "command" 和 "argument" 之间必须有空格，
+             // 那么 "cdpartialarg" 会被看作一个整体的 commandName，不会进入这个 "cd"||"ls" 分支。
+             // 此处假设命令和参数已用空格分开，或者正准备输入第一个参数。
+            return; 
+        }
+        currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
+
     } else {
-        return; // Let other Ctrl/Meta/Alt shortcuts behave normally or be ignored
+        return; // 不是可进行路径补全的已知命令
+    }
+
+    if (!currentContextChildren) currentContextChildren = []; // 确保是数组以防出错
+
+    let matches = currentContextChildren
+        .filter(child => {
+            const title = child.title || "";
+            // 忽略大小写进行匹配
+            if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
+            if (effectiveCommandType === "cd") return !!child.children; // 'cd' 只补全目录
+            return true; // './' 和 'ls' 补全文件和目录
+        })
+        .map(child => child.title)
+        .sort(); // 按字母排序
+
+    if (matches.length === 1) {
+        const match = matches[0];
+        const matchedNode = currentContextChildren.find(c => c.title === match);
+
+        let completedSegmentOfName = match; // 匹配到的实际文件/目录名
+        if (matchedNode && matchedNode.children) {
+            // completedSegmentOfName += "/"; // 如果是目录，则在其名称后添加 "/"
+        }
+
+        let finalInsertionText;
+        if (effectiveCommandType === "cd") {
+            // 对于 'cd'，整个路径参数（prefixPath + completedSegmentOfName）会被引号包围
+            finalInsertionText = `"${prefixPath + completedSegmentOfName}"`;
+        } else { // 对于 './' 和 'ls'
+            finalInsertionText = prefixPath + completedSegmentOfName;
+        }
+
+        // replaceFrom 是参数部分的起始位置
+        // replaceTo 是当前光标位置，即用户已输入部分的末尾
+        const replaceFrom = startOfBaseArgumentStringInRelevantInput;
+        const replaceTo = cursorPosition;
+
+        buffer = buffer.substring(0, replaceFrom) + finalInsertionText + buffer.substring(replaceTo);
+        cursorPosition = replaceFrom + finalInsertionText.length;
+        updateInputDisplay();
+
+    } else if (matches.length > 1) {
+        let commonPrefix = matches[0]; // 假设 matches 不为空
+        for (let i = 1; i < matches.length; i++) {
+            while (commonPrefix.length > 0 && !matches[i].toLowerCase().startsWith(commonPrefix.toLowerCase())) {
+                commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
+            }
+            if (commonPrefix === "") break; // 如果没有公共前缀，则停止
+        }
+
+        if (commonPrefix.length > namePrefixToComplete.length) {
+            // 只补全到公共前缀部分
+            const partialCompletionText = prefixPath + commonPrefix;
+            const replaceFrom = startOfBaseArgumentStringInRelevantInput;
+            const replaceTo = cursorPosition;
+
+            buffer = buffer.substring(0, replaceFrom) + partialCompletionText + buffer.substring(replaceTo);
+            cursorPosition = replaceFrom + partialCompletionText.length;
+            updateInputDisplay();
+        }
+
+        // 打印所有匹配项供用户选择
+        print(full_path + " " + buffer.substring(0, cursorPosition)); // 回显当前输入行
+        let outputLineContent = "";
+        matches.forEach(m => {
+            const node = currentContextChildren.find(c => c.title === m);
+            outputLineContent += m + (node && node.children ? "/" : "") + "   "; // 目录后加斜杠，并用空格隔开
+        });
+        print(outputLineContent.trim(), "placeholder"); // "placeholder" 是您之前使用的样式类型
+        done(); // 重绘提示符和输入区域
+    }
+    // 如果没有匹配项，或者公共前缀不比已输入的长，则不执行任何操作 (可以添加提示音)
+    return;
+}
+
+
+  if (control_cmd || e.metaKey || e.altKey) {
+    if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'v') {
+        // Paste handled by event listener
+    } else if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'c' && window.getSelection().toString().length > 0) {
+        // Allow native copy if text is selected
+    } else {
+       // return; // Let other Ctrl/Meta/Alt shortcuts behave normally or be ignored
     }
   }
 
-
-  if (isComposing) return; // Let IME handle key events during composition
+  if (isComposing) return;
 
   if (e.key === "Backspace") {
     e.preventDefault();
     if (cursorPosition > 0) {
-      if (cursorPosition - 2 >= 0 && buffer.substring(cursorPosition - 2, cursorPosition).startsWith("^")) {
-        buffer = buffer.substring(0, cursorPosition - 2) + buffer.substring(cursorPosition);
-        cursorPosition -=2 ;
-      }
-      else {
-        buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
-        cursorPosition--;
-      }
+      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
+      // Basic backspace, could be enhanced for ^H like behavior if needed
+      buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
+      cursorPosition--;
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
     e.preventDefault();
-    if (promptSymbol.style.display === "none" && commanding) {
-        return; // If command is running and input is hidden, Enter does nothing
-    }
+    if (promptSymbol.style.display === "none" && commanding) return;
 
-    const commandToProcess = buffer.trim(); // Process the trimmed buffer
+    const commandToProcess = buffer.trim();
+    if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
+         previousCommands.push(buffer);
+         if (previousCommands.length > 50) previousCommands.shift(); // Limit history size
+         saveCommandHistory(); // Save command history to storage
+    }
+    previousCommandIndex = 0; // Reset history index
+
     if (commandToProcess === "") {
-      print(`${full_path} ${buffer}`); // Echo the (potentially untrimmed) buffer content
+      print(`${full_path} ${buffer}`);
+      // print(""); // Blank line after empty command
     } else {
-      if (buffer !== previousCommands.at(-1)) { // Avoid duplicate empty entries or same last command
-         previousCommands.push(buffer); // Store original buffer with spaces if intended
-         if (previousCommands.length > 20) previousCommands.shift();
-      }
-      previousCommandIndex = 0;
-      processCommand(commandToProcess);
+      processCommand(commandToProcess); // processCommand now adds its own blank line
     }
     buffer = "";
     cursorPosition = 0;
-    if (!commanding) { // only update display if not entering an awaiting state
-        updateInputDisplay();
+    if (!commanding) {
+        updateInputDisplay(); // Update display unless an async command took over
     }
 
-  } else if (e.key.length === 1) { // Handles most printable characters
+  } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     e.preventDefault();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
   }
-  // Other keys (Tab, Escape, etc.) are currently ignored or default browser behavior
 });
+
+// Helper to get children at a given path string relative to a starting directory node
+function getChildrenAtPath(startDirNode, pathStr) {
+    if (!pathStr) return startDirNode.children; // No path means current directory's children
+
+    const segments = pathStr.split('/').filter(s => s.length > 0); // Filter out empty segments from "foo//bar"
+    let currentDirNode = startDirNode;
+
+    for (const segment of segments) {
+        if (!currentDirNode || !currentDirNode.children) return null; // Invalid path segment if no children
+        const foundNode = findChildByTitle(currentDirNode.children, segment); // findChildByTitle expects directories
+        if (foundNode && foundNode.children) { // Must be a directory to continue path
+            currentDirNode = foundNode;
+        } else {
+            return null; // Path invalid or segment not a directory
+        }
+    }
+    return currentDirNode.children;
+}
+
 
 // Handle paste
 document.body.addEventListener('paste', (e) => {
     if (isComposing || commanding || promptSymbol.style.display === "none") {
-        return; // Don't paste if composing, command running, or input hidden
+        return;
     }
     e.preventDefault();
     const text = (e.clipboardData || window.clipboardData).getData('text');
-    buffer = buffer.substring(0, cursorPosition) + text + buffer.substring(cursorPosition);
+    buffer = buffer.substring(0, cursorPosition) + text.replace(/\r?\n|\r/g, ' ') + buffer.substring(cursorPosition); // Replace newlines with spaces
     cursorPosition += text.length;
     updateInputDisplay();
 });
@@ -909,57 +1531,58 @@ document.body.addEventListener('paste', (e) => {
 document.body.addEventListener('compositionstart', (e) => {
   if (commanding || promptSymbol.style.display === "none") return;
   isComposing = true;
-  // Hide block cursor, updateInputDisplay will be called by compositionupdate or keydown
   blockCursor.style.display = "none";
-  // Initial display before first compositionupdate event
-  typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
-                        `<span class="composing-text"></span>` + // Empty composing span initially
-                        escapeHtml(buffer.substring(cursorPosition));
+  
+  // Ensure typedText is focused and caret is correctly positioned BEFORE IME starts.
+  typedText.focus();
+  // The innerHTML manipulation here helps clear any browser-held composition state visually.
+  // It also prepares our .composing-text span if we decide to style via script (though currently not in compositionupdate).
+  const textBefore = escapeHtml(buffer.substring(0, cursorPosition));
+  const textAfter = escapeHtml(buffer.substring(cursorPosition));
+  typedText.innerHTML = textBefore + `<span class="composing-text"></span>` + textAfter; // Empty span as placeholder
+  
+  setCaretAtOffset(typedText, cursorPosition); // Crucial for IME positioning
 });
 
 document.body.addEventListener('compositionupdate', (e) => {
-  e.preventDefault?.(); // This was in the original code.
+  // e.preventDefault?.(); // This was in the original, keep if needed, but usually not for letting browser handle IME display
   if (commanding || promptSymbol.style.display === "none") return;
   if (!isComposing) return;
-
-  // PREVIOUS LOGIC that was causing the duplicate input by manually rendering composed text:
-  // typedText.innerHTML = escapeHtml(buffer.substring(0, cursorPosition)) +
-  //                       `<span class="composing-text">${escapeHtml(e.data)}</span>` +
-  //                       escapeHtml(buffer.substring(cursorPosition));
-  // NEW LOGIC:
-  // By removing the lines above, we prevent the script from manually updating
-  // typedText.innerHTML during composition. The browser's native IME handling
-  // for the contenteditable #typedText element should then be solely responsible
-  // for displaying the composing text. This is intended to resolve the "duplicate input" issue.
-  // Note: The custom styling defined by .composing-text (see style.css) will not be
-  // applied to the live composing text with this change. The text will use the browser's
-  // default IME styling during composition.
+  // No longer setting typedText.innerHTML here to avoid duplicate input.
+  // Browser's native IME will update the contenteditable #typedText.
+  // If custom styling of composing text is needed, this is where it would be complex.
+  // For now, rely on browser's default IME styling.
+  // We might need to update our internal understanding of cursor if e.data changes selection.
+  // However, `compositionend` is the primary source for final text.
 });
 
 document.body.addEventListener('compositionend', (e) => {
   if (commanding || promptSymbol.style.display === "none") return;
-  if (!isComposing) return; // Should not happen if logic is correct
+  if (!isComposing) return;
 
   isComposing = false;
   const composedText = e.data;
 
+  // After composition, the contenteditable typedText contains the composed string + surrounding text.
+  // We need to reconcile this with our buffer.
+  // A simple way is to assume composedText replaces what was being composed at cursorPosition.
   if (composedText) {
     buffer = buffer.substring(0, cursorPosition) + composedText + buffer.substring(cursorPosition);
     cursorPosition += composedText.length;
   }
-  updateInputDisplay(); // Update to show final composed text and correct cursor
+  // updateInputDisplay will now re-render based on the updated buffer and cursorPosition,
+  // and it will also call setCaretAtOffset to ensure the final caret is correct.
+  updateInputDisplay();
 });
 
 
 function interrupt() {
   if (commanding) {
-    // print("^C"); // ping_func now prints ^C if interrupted during loop
-    commanding = false;
-    done();
+    commanding = false; // Set flag to stop async loops like ping
+    // Output for ^C is handled by the command itself or keydown handler
+    print("^C", "warning");
+    done(); // Restore prompt and input display
   }
-  // buffer = ""; // Don't clear buffer on interrupt, user might want to edit
-  // cursorPosition = 0; // Don't reset cursor position
-  updateInputDisplay();
 }
 
 document.body.addEventListener("keyup", e => {
@@ -1003,25 +1626,29 @@ function updateLinesOnResize() {
   }
 }
 
+
 let resizeTimeout;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimeout);
-  resizeTimeout = setTimeout(updateLinesOnResize, 150);
+  resizeTimeout = setTimeout(updateLinesOnResize, 150); // Debounce resize
 });
 
-window.onload = () => {
-  document.body.focus();
-  updateCharacterWidth();
-  welcomeMsg(); // This will print initial messages
-  updateInputDisplay(); // Initialize the input display
+window.onload = async () => {
+  // No explicit body focus, let browser decide or user click.
+  // typedText.focus() will be called by done() or click handler.
+  updateCharacterWidth(); // Initial calculation
+  await loadSettings(); // Load settings and user info
+  welcomeMsg();
+  // updateInputDisplay(); // Called by done()
+  done(); // Initial setup of prompt and input display
 };
 
 function detectBrowser() {
     var userAgent = navigator.userAgent;
     if (userAgent.includes("Firefox/")) return "Firefox";
-    if (userAgent.includes("Edg/")) return "Edge";
+    if (userAgent.includes("Edg/")) return "Edge"; // Edge before Chrome
     if (userAgent.includes("Chrome/") && !userAgent.includes("Edg/") && !userAgent.includes("OPR/")) return "Chrome";
-    if (userAgent.includes("Safari/") && !userAgent.includes("Chrome/")) return "Safari";
+    if (userAgent.includes("Safari/") && !userAgent.includes("Chrome/") && !userAgent.includes("Edg/")) return "Safari";
     if (userAgent.includes("OPR/") || userAgent.includes("Opera")) return "Opera";
     return "Unknown browser";
 }
@@ -1034,27 +1661,26 @@ function welcomeMsg() {
     print("");
     print("Default Search Engine:");
     print(`  - Current: ${default_search_engine}`, "highlight");
-    print("  - Current default mode: " + (default_mode ? "on" : "off"), `${default_mode ? "success" : "warning"}`);
-
+    print(`  - Current default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
     print("  - Supported: google, bing, baidu");
-
-    print("  - Change with: default <search engine> (google, bing, baidu)", "hint");
-    print("  - Turn on / off default mode with: default on / off", "hint");
+    print("  - Change with: default <search engine|on|off>", "hint");
     print("");
 }
 
-// If focus on terminal, focus on typedText
-document.body.addEventListener("click", function() {
-  setTimeout(() => {
-    // 只有在没有选中文本时才 focus
-    if (!window.getSelection().toString()) {
-      // console.log("Focused");
+document.body.addEventListener("click", function(event) {
+  // If the click is not on the input line or output, and no text is selected globally
+  if (!inputLine.contains(event.target) && !output.contains(event.target) && !window.getSelection().toString()) {
       typedText.focus();
-    }
-  }, 0);
-  // typedText.focus(); // 点击后聚焦到 edit div
+      // setCaretAtOffset(typedText, cursorPosition); // Ensure caret is at the logical position
+  } else if (inputLine.contains(event.target) && !window.getSelection().toString()) {
+      // If click is on input line (e.g. typedText itself) and no selection, ensure focus and caret
+      typedText.focus();
+      // Let browser handle caret placement on direct click if possible, or calculate from click event.
+      // For simplicity, if they click typedText, it should gain focus. updateInputDisplay will handle caret.
+  }
 });
 
+const inputLine = document.getElementById("input-line"); // Cache for click listener
 
 // Ping.js (provided by user, assumed to be at the end or imported)
 // Ensure Ping class is available before ping_func is called.
