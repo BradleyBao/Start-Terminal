@@ -50,9 +50,9 @@ function update_user_path() {
 // 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
 // =================================================================
 async function loginWithMicrosoft() {
-    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ 从 Azure 门户获取的客户端ID
+    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
 
-    // --- PKCE 辅助函数 ---
+    // --- PKCE Help Function ---
     // 1. 创建一个随机字符串作为 code_verifier
     function generateCodeVerifier() {
         const randomBytes = new Uint8Array(32);
@@ -69,34 +69,40 @@ async function loginWithMicrosoft() {
         return btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuffer)))
             .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
     }
-    // --- PKCE 辅助函数结束 ---
+    // --- PKCE Help Function ---
 
 
-    // 1. 生成PKCE码
+    // 1. Generate PKCE code_verifier and code_challenge
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = await generateCodeChallenge(codeVerifier);
 
 
-    // 2. 构建微软授权URL (注意参数变化)
+    // 2. Construct Microsoft Authorization URL
     const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
     authUrl.searchParams.append('client_id', MS_CLIENT_ID);
     authUrl.searchParams.append('response_type', 'code'); // <--- 关键变化
     authUrl.searchParams.append('redirect_uri', chrome.identity.getRedirectURL());
     authUrl.searchParams.append('scope', 'https://graph.microsoft.com/User.Read');
     authUrl.searchParams.append('response_mode', 'query'); // <--- 推荐使用 'query'
-    // 添加PKCE参数
+    // Add PKCE parameters
     authUrl.searchParams.append('code_challenge', codeChallenge);
     authUrl.searchParams.append('code_challenge_method', 'S256');
 
-    console.log("即将打开授权URL:", authUrl.href);
+    console.log("Opening URL:", authUrl.href);
+    print("Opening Microsoft login page...", "info");
 
-    // 3. 启动Web授权流程，获取授权码(code)
+    // 3. Start Web Auth (code)
     chrome.identity.launchWebAuthFlow({
         url: authUrl.href,
         interactive: true
     }, (redirectUrl) => {
         if (chrome.runtime.lastError || !redirectUrl) {
-            console.error("授权失败或用户取消:", chrome.runtime.lastError?.message);
+            console.error("Auth Failed:", chrome.runtime.lastError?.message);
+            
+            print("Auth Failed: " + (chrome.runtime.lastError?.message || "Unknown Error"), "error");
+            print("");
+
+            done();
             return;
         }
         
@@ -106,18 +112,23 @@ async function loginWithMicrosoft() {
 
         if (!code) {
             // 这里处理 redirectUrl 中返回的错误信息
-            const error = url.searchParams.get('error_description') || "未能从重定向URL中获取 code";
-            console.error("授权码获取失败:", error);
+            const error = url.searchParams.get('error_description') || "Failed to get code";
+            console.error("Failed to get code:", error);
+            print("Failed to get code: " + error, "error");
             // 可以在此处向用户显示更友好的错误信息
             if (error.includes("'token' is disabled")) {
-                alert("登录失败：应用配置需要更新，请联系开发者。");
+                console.error("Failed to login, please contact the developer.");
+                print("Failed to login, please contact the developer.", "error");
             }
+            print("");
+            done();
             return;
         }
 
-        console.log("成功获取授权码 (code)!");
+        console.log("Successfully get code");
+        print("Successfully get code", "success");
 
-        // 5. 将授权码交换为 Access Token
+        // 5. Exchange to Access Token
         const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
         const params = new URLSearchParams();
         params.append('client_id', MS_CLIENT_ID);
@@ -125,7 +136,7 @@ async function loginWithMicrosoft() {
         params.append('code', code);
         params.append('redirect_uri', chrome.identity.getRedirectURL());
         params.append('grant_type', 'authorization_code');
-        // 发送之前生成的 verifier，用于验证
+        // Send verifier to verify
         params.append('code_verifier', codeVerifier);
 
         fetch(tokenUrl, {
@@ -138,12 +149,16 @@ async function loginWithMicrosoft() {
         .then(response => response.json())
         .then(tokenInfo => {
             if (tokenInfo.error) {
-                console.error("Token交换失败:", tokenInfo.error_description);
+                console.error("Token Exchange Failed:", tokenInfo.error_description);
+                print("Token Exchange Failed: " + tokenInfo.error_description, "error");
+                print("");
+                done();
                 return;
             }
             
             const accessToken = tokenInfo.access_token;
-            console.log("成功交换得到 Access Token!");
+            console.log("Successfully get Access Token!");
+            print("Successfully get Access Token", "success");
 
             // 6. 使用 Access Token 调用 Microsoft Graph API 获取用户信息 (这部分不变)
             return fetch('https://graph.microsoft.com/v1.0/me', {
@@ -155,17 +170,24 @@ async function loginWithMicrosoft() {
         .then(response => response.json())
         .then(userInfo => {
             if (userInfo.error) {
-                console.error("获取微软用户信息失败:", userInfo.error.message);
+                console.error("Failed to get user info:", userInfo.error.message);
+                print("Failed to get user info: " + userInfo.error.message, "error");
                 return;
             }
             const user_info = userInfo.userPrincipalName || userInfo.displayName;
             // console.log("成功获取微软用户信息:", user, userInfo);
             // 在这里更新你的终端页面
+            print(`Welcome, ${user_info}`, "success");
             user = user_info;
             update_user_path();
+            print("");
+            done();
         })
         .catch(error => {
-            console.error("流程中出现未知错误:", error);
+            console.error("An Unknown Error occurred:", error);
+            print("An Unknown Error occurred: " + error.message, "error");
+            print("");
+            done();
         });
     });
 }
@@ -470,7 +492,7 @@ const commands = {
     // if (options.t) result += " continuously";
     // if (options.n) result += ` ${options.n} times`;
     ping_func(args[0], options);
-    awating();
+    awaiting();
     // return result;
   },
   locale: (args, options) => {
@@ -544,9 +566,9 @@ const commands = {
 
   },
   mslogin: () => {
-    print("Logging in with Microsoft...");
+    print("Logging in with Microsoft");
+    awaiting();
     loginWithMicrosoft();
-    return " ";
   },
   help: () => {
     print("Commands Available:");
@@ -862,7 +884,7 @@ function processCommand(input) {
   }
 }
 
-function awating() {
+function awaiting() {
   typedText.innerHTML = "";
   blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
