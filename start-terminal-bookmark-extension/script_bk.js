@@ -24,9 +24,9 @@ let path = [];
 
 let full_path = null;
 
-chrome.bookmarks.getTree(bookmarkTree => {
-  get_fav(bookmarkTree);
-});
+// chrome.bookmarks.getTree(bookmarkTree => {
+//   get_fav(bookmarkTree);
+// });
 
 function get_fav(bookmarks) {
   root = bookmarks[0];
@@ -348,7 +348,7 @@ function updateCharacterWidth() {
 }
 
 function changeDir(nameParts) {
-  const name = nameParts[0]; // Expecting an array, take the first part as the target
+  const name = nameParts.join(' '); // Expecting an array, take the first part as the target
   if (!name) {
     print("cd: missing operand", "error");
     return;
@@ -358,6 +358,7 @@ function changeDir(nameParts) {
     if (path.length > 1) {
       path.pop();
       current = path[path.length - 1];
+      saveCurrentPath();
     }
     update_user_path();
     return;
@@ -367,6 +368,7 @@ function changeDir(nameParts) {
   if (target && target.children) { // Ensure it's a directory
     current = target;
     path.push(current);
+    saveCurrentPath();
   } else if (target && !target.children) {
     print(`cd: ${name}: Not a directory`, "error");
   } else {
@@ -734,6 +736,9 @@ const commands = {
     print("  cd ..                 - Go to parent directory.");
     print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("  pwd                   - Show current bookmark path.");
+    print("  mkdir <folder>   - Create a new bookmark folder.");
+    print("  rm [-r] [-f] <folder / file>   - Remove a bookmark or folder.");
+    print("  rmdir <folder>   - Remove an empty bookmark folder.");
     print("");
 
     print("Account Management", "highlight");
@@ -1084,6 +1089,12 @@ function saveCommandHistory() {
   chrome.storage.sync.set({ commandHistory: previousCommands });
 }
 
+function saveCurrentPath() {
+  // Save ID, ID is unique and can be used to retrieve the bookmark later
+  const pathIds = path.map(node => node.id);
+  chrome.storage.sync.set({ bookmarkPath: pathIds });
+}
+
 async function refreshMicrosoftToken(refreshToken) {
   print("Microsoft session token expired. Attempting to refresh...", "info");
   const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
@@ -1129,8 +1140,37 @@ async function refreshMicrosoftToken(refreshToken) {
 
 // Load all settings 
 async function loadSettings() {
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth']);
+  // 1. 异步获取完整的书签树
+  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+  root = bookmarkTree[0];
+  current = root; // 默认在根目录
+  path = [root];  // 默认路径
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath']);
+// 3. 恢复书签路径
+  if (data.bookmarkPath) {
+    let restoredPathIsValid = true;
+    let tempCurrent = root;
+    let tempPath = [root];
 
+    // 从根目录开始，根据ID逐级向下查找，重建路径
+    for (let i = 1; i < data.bookmarkPath.length; i++) {
+      const nextId = data.bookmarkPath[i];
+      const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
+
+      if (nextNode && nextNode.children) { // 确保路径中的节点仍然存在且是文件夹
+        tempCurrent = nextNode;
+        tempPath.push(nextNode);
+      } else {
+        restoredPathIsValid = false; // 如果路径中某个文件夹被删了，则恢复失败
+        break;
+      }
+    }
+
+    if (restoredPathIsValid) {
+      current = tempCurrent;
+      path = tempPath;
+    }
+  }
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
     default_search_engine = data.settings.default_search_engine ?? "google";
@@ -1281,163 +1321,99 @@ document.body.addEventListener("keydown", e => {
 if (e.key === "Tab") {
     e.preventDefault();
     const relevantInput = buffer.substring(0, cursorPosition);
-    // 使用一个更简单的 split 来获取命令名，因为我们主要关心第一个 token 是否为特殊命令
     const pre_parts = relevantInput.trimStart().split(/\s+/);
     let commandName = pre_parts[0] || "";
 
-    let prefixPath = ""; // 例如 "folder/"，在当前补全参数内部的路径前缀
-    let namePrefixToComplete = ""; // 例如 "myFile"，用户正在输入的文件/目录名部分
-    let currentContextChildren = current.children; // 默认为当前目录的子节点
-    let effectiveCommandType = ""; // 用于指导过滤逻辑："cd", "ls", "./"
-
-    // 这是当前正在处理的完整参数字符串
-    // 例如：如果输入是 "cd myfolder/sub"，那么这个字符串就是 "myfolder/sub"
-    let baseArgumentString = "";
-    // 这个参数字符串在 relevantInput 中的起始索引
+    let prefixPath = "";
+    let namePrefixToComplete = "";
+    let currentContextChildren = current.children;
+    let effectiveCommandType = "";
     let startOfBaseArgumentStringInRelevantInput = 0;
 
     if (commandName.startsWith("./")) {
         effectiveCommandType = "./";
-        startOfBaseArgumentStringInRelevantInput = "./".length; // "./" 之后的内内容是参数
-        baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
+        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
+    } else if (["cd", "ls", "rm", "rmdir"].includes(commandName)) {
+        effectiveCommandType = commandName;
+        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
+    } else {
+        return;
+    }
 
+    let baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
+    if (!baseArgumentString && relevantInput.endsWith(" ")) {
+        namePrefixToComplete = "";
+        prefixPath = "";
+    } else {
         const lastSlashPos = baseArgumentString.lastIndexOf('/');
         if (lastSlashPos > -1) {
             prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
             namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
         } else {
-            prefixPath = ""; // 参数内没有路径前缀
+            prefixPath = "";
             namePrefixToComplete = baseArgumentString;
         }
-        // getChildrenAtPath 应该返回 current 目录下，由 prefixPath 指定的子目录中的内容
-        currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
-
-    } else if (commandName === "cd" || commandName === "ls") {
-        effectiveCommandType = commandName;
-        // 确定参数部分的起始位置和内容
-        const commandEndIndex = relevantInput.indexOf(commandName) + commandName.length;
-        let potentialArgStringStart = relevantInput.substring(commandEndIndex); // 获取命令后的所有字符
-        
-        // 检查命令后是否有空格，确定参数的实际开始
-        const firstSpaceMatch = potentialArgStringStart.match(/^\s+/);
-        if (firstSpaceMatch) { // 如果命令后有空格
-            startOfBaseArgumentStringInRelevantInput = commandEndIndex + firstSpaceMatch[0].length;
-            baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
-
-            const lastSlashPos = baseArgumentString.lastIndexOf('/');
-            if (lastSlashPos > -1) {
-                prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
-                namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
-            } else {
-                prefixPath = "";
-                namePrefixToComplete = baseArgumentString;
-            }
-            
-            // 如果baseArgumentString以空格结尾 (例如 "cd mydir "), 那么实际是在补全 mydir 内部的内容
-            // 或者在 "cd myfolder/ " 之后补全
-            if (relevantInput.endsWith(" ")) {
-                 const trimmedBaseArg = baseArgumentString.trim();
-                 if (trimmedBaseArg !== "" && !trimmedBaseArg.endsWith("/")) {
-                    // prefixPath = trimmedBaseArg + "/";
-                 } else {
-                    prefixPath = trimmedBaseArg; // 可能是 "folder/" 或 ""
-                 }
-                 if (!prefixPath.endsWith("/") && prefixPath !== "") prefixPath += "/";
-
-                 namePrefixToComplete = "";
-            }
-
-        } else if (pre_parts.length === 1 && !potentialArgStringStart) {
-             // 只有命令本身，例如 "cd" 然后按 Tab，或者 "ls" 然后按 Tab
-             // 这种情况下，我们补全当前目录的内容，namePrefixToComplete 为空
-            namePrefixToComplete = "";
-            prefixPath = "";
-            startOfBaseArgumentStringInRelevantInput = cursorPosition; // 准备在光标处追加
-        } else {
-             // 命令后直接跟参数，无空格，例如 "cdmyparam" (这在您的解析器中可能不被视为 "cd" 命令加参数)
-             // 或者其他不符合 "命令 参数" 结构的情况
-             // 如果您的命令解析要求 "command" 和 "argument" 之间必须有空格，
-             // 那么 "cdpartialarg" 会被看作一个整体的 commandName，不会进入这个 "cd"||"ls" 分支。
-             // 此处假设命令和参数已用空格分开，或者正准备输入第一个参数。
-            return; 
-        }
-        currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
-
-    } else {
-        return; // 不是可进行路径补全的已知命令
     }
-
-    if (!currentContextChildren) currentContextChildren = []; // 确保是数组以防出错
+    
+    currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
+    if (!currentContextChildren) currentContextChildren = [];
 
     let matches = currentContextChildren
         .filter(child => {
             const title = child.title || "";
-            // 忽略大小写进行匹配
             if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-            if (effectiveCommandType === "cd") return !!child.children; // 'cd' 只补全目录
-            return true; // './' 和 'ls' 补全文件和目录
+            if (effectiveCommandType === "cd" || effectiveCommandType === "rmdir") {
+                return !!child.children;
+            }
+            return true;
         })
         .map(child => child.title)
-        .sort(); // 按字母排序
+        .sort();
 
     if (matches.length === 1) {
         const match = matches[0];
         const matchedNode = currentContextChildren.find(c => c.title === match);
-
-        let completedSegmentOfName = match; // 匹配到的实际文件/目录名
+        
+        let completion = match;
+        // --- 变化点 1: 将 "/" 改为 " " ---
         if (matchedNode && matchedNode.children) {
-            // completedSegmentOfName += "/"; // 如果是目录，则在其名称后添加 "/"
+            completion += " "; // 如果是目录，补全后添加空格以便输入下一个参数
         }
 
-        let finalInsertionText;
-        if (effectiveCommandType === "cd") {
-            // 对于 'cd'，整个路径参数（prefixPath + completedSegmentOfName）会被引号包围
-            finalInsertionText = `"${prefixPath + completedSegmentOfName}"`;
-        } else { // 对于 './' 和 'ls'
-            finalInsertionText = prefixPath + completedSegmentOfName;
-        }
-
-        // replaceFrom 是参数部分的起始位置
-        // replaceTo 是当前光标位置，即用户已输入部分的末尾
         const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-        const replaceTo = cursorPosition;
-
-        buffer = buffer.substring(0, replaceFrom) + finalInsertionText + buffer.substring(replaceTo);
-        cursorPosition = replaceFrom + finalInsertionText.length;
+        const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
+        
+        buffer = newBuffer;
+        cursorPosition = replaceFrom + prefixPath.length + completion.length;
         updateInputDisplay();
 
     } else if (matches.length > 1) {
-        let commonPrefix = matches[0]; // 假设 matches 不为空
+        let commonPrefix = matches[0];
         for (let i = 1; i < matches.length; i++) {
-            while (commonPrefix.length > 0 && !matches[i].toLowerCase().startsWith(commonPrefix.toLowerCase())) {
+            while (!matches[i].toLowerCase().startsWith(commonPrefix.toLowerCase())) {
                 commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
             }
-            if (commonPrefix === "") break; // 如果没有公共前缀，则停止
         }
 
         if (commonPrefix.length > namePrefixToComplete.length) {
-            // 只补全到公共前缀部分
-            const partialCompletionText = prefixPath + commonPrefix;
             const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-            const replaceTo = cursorPosition;
-
-            buffer = buffer.substring(0, replaceFrom) + partialCompletionText + buffer.substring(replaceTo);
-            cursorPosition = replaceFrom + partialCompletionText.length;
+            const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + commonPrefix + buffer.substring(cursorPosition);
+            
+            buffer = newBuffer;
+            cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
             updateInputDisplay();
         }
 
-        // 打印所有匹配项供用户选择
-        print(full_path + " " + buffer.substring(0, cursorPosition)); // 回显当前输入行
+        print(full_path + " " + buffer);
         let outputLineContent = "";
         matches.forEach(m => {
-            const node = currentContextChildren.find(c => c.title === m);
-            outputLineContent += m + (node && node.children ? "/" : "") + "   "; // 目录后加斜杠，并用空格隔开
+            // --- 变化点 2: 不再显示 "/" ---
+            outputLineContent += m + "   "; // 只显示名称，用多个空格分隔
         });
-        print(outputLineContent.trim(), "placeholder"); // "placeholder" 是您之前使用的样式类型
-        done(); // 重绘提示符和输入区域
+        print(outputLineContent.trim(), "placeholder");
+        done();
     }
-    // 如果没有匹配项，或者公共前缀不比已输入的长，则不执行任何操作 (可以添加提示音)
-    return;
+    return; // 确保Tab键逻辑在此结束
 }
 
 

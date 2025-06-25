@@ -4,7 +4,7 @@
   "description": "__MSG_appDesc__",  
   "author": "Tian Yi, Bao",
   "homepage_url": "https://www.tianyibrad.com",
-  "version": "1.1",
+  "version": "1.3",
   "default_locale": "en",
   "chrome_url_overrides": {
     "newtab": "newtab.html"

@@ -6,6 +6,8 @@ const blockCursor = document.querySelector(".typed-container .cursor"); // The '
 const terminal = document.getElementById("terminal");
 const promptSymbol = document.getElementById("promptSymbol");
 const supported_search_engine = ["google", "bing", "baidu"];
+const backgroundContainer = document.getElementById("background-container");
+const bgUploadInput = document.getElementById("bg-upload-input");
 
 var control_cmd = false;
 var commanding = false;
@@ -28,6 +30,10 @@ let full_path = null;
 //   get_fav(bookmarkTree);
 // });
 
+let promptTheme = "default"; // Default theme
+let promptOpacity = .15; // Default opacity for the prompt
+let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+
 function get_fav(bookmarks) {
   root = bookmarks[0];
   current = root;
@@ -39,7 +45,7 @@ function get_fav(bookmarks) {
 function update_user_path() {
   full_path = user;
   if (user !== "") {
-    full_path += " ";
+    full_path += ": ";
   }
   full_path += path.map(p => p.title || "~").join("/") || "/";
   full_path +=  " $";
@@ -258,26 +264,53 @@ function setCaretAtOffset(element, offset) {
 }
 
 
-function listChildren() {
-  if (!current.children) {
-    print("Not a directory");
+function listChildren(options) {
+  if (!current || !current.children) {
+    print("Error: current directory not available.", "error");
     return;
   }
 
+  if (current.children.length === 0) {
+    return;
+  }
+
+  if (options && options.l) {
+    const formatDate = (timestamp) => {
+      return new Date(timestamp).toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).replace(',', '');
+    };
+    current.children.forEach((child, index) => {
+    const typeChar = child.children ? "d" : "-"; // 'd' for directory, '-' for file
+    const date = child.dateAdded || child.dateGroupModified || Date.now();
+    const formattedDate = formatDate(date);
+    const isLastChild = (index === current.children.length - 1);
+    const className = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
+    if (user !== "") {
+      print(`${typeChar}rwxr-xr-x ${user} ${user} ${formattedDate} ${child.title}`, className, isLastChild);
+    } else {
+      print(`${typeChar}rwxr-xr-x root root ${formattedDate} ${child.title}`, className, isLastChild);
+    }
+
+    return;
+  });
+  } else {
+    // Default listing
   current.children.forEach((child, index) => {
     const isLastChild = (index === current.children.length - 1);
-
-    if (child.children) { // 这是一个文件夹
-      printLine(`${child.title}`, "folder", isLastChild);
-    } else { // 这是一个书签（文件）
-      // 检查是否为 "executable" (javascript: URL)
-      if (child.url && child.url.startsWith("javascript:")) {
-        printLine(`${child.title}`, "exec", isLastChild);
-      } else {
-        printLine(`${child.title}`, "file", isLastChild);
-      }
-    }
+    const className = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
+    // If the name is too long and no enough space, end this line with spaces and continued with a new line
+    printLine(child.title, className, isLastChild);
   });
+  };
+
+  
+  
 }
 
 const previousCommands = [];
@@ -523,7 +556,7 @@ const commands = {
     clearOutput();
   },
   ls: (args, options) => {
-    listChildren();
+    listChildren(options);
   },
   cd: (args, options) => {
     if (!args) {
@@ -675,6 +708,70 @@ const commands = {
       done();
     });
   },
+  // Theme 
+  theme: (args, options) => {
+    const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+    const themeName = args[0];
+    if (!themeName) {
+        return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+    }
+    if (supportedThemes.includes(themeName)) {
+        applyTheme(themeName);
+        chrome.storage.sync.set({ theme: themeName }); // 保存新设置
+        return `Theme set to ${themeName}.`;
+    } else {
+        return `Error: Theme '${themeName}' not supported.`;
+    }
+  },
+
+  uploadbg: () => {
+      bgUploadInput.click(); // Programmatically click the hidden file input
+      print("Opening file picker. Please select an image to upload as background.", "info");
+      awaiting();
+      // return "File picker opened. Please select an image.";
+  },
+
+  setbgAPI: (args) => {
+    const arg = args[0];
+    // Check if it is the link 
+    if (arg && (arg.startsWith("http://") || arg.startsWith("https://"))) {
+        promptBgRandomAPI = arg;
+        chrome.storage.sync.set({ imgAPI: promptBgRandomAPI });
+        print(`Background image API set to ${arg}.`, "success");
+        return;
+    }
+  },
+
+  setbg: (args) => {
+        const arg = args[0];
+        if (arg === 'clear') {
+            chrome.storage.local.remove('customBackground', () => {
+                // 回到默认背景
+                applyBackground(null, promptOpacity);
+                print("Custom background cleared. Reverted to default.", "success");
+            });
+            return;
+        }
+
+        // 检查是否是设置透明度
+        const opacityValue = parseFloat(arg);
+        if (!isNaN(opacityValue) && opacityValue >= 0 && opacityValue <= 1) {
+            promptOpacity = opacityValue;
+            applyBackground(backgroundContainer.style.backgroundImage.slice(5, -2), opacityValue); // Re-apply current bg with new opacity
+            chrome.storage.sync.set({ background_opacity: promptOpacity });
+            return `Background opacity set to ${opacityValue}.`;
+        }
+        
+        // 应用已上传的背景
+        chrome.storage.local.get('customBackground', (data) => {
+            if (data.customBackground) {
+                applyBackground(data.customBackground, promptOpacity);
+                print("Custom background applied.", "success");
+            } else {
+                print("No background image uploaded. Use 'uploadbg' first.", "warning");
+            }
+        });
+    },
 
   default: (args, options) => {
     // Change the default search engine
@@ -727,6 +824,12 @@ const commands = {
     print("  bilibili <query> [-b] - Search with Bilibili.");
     print("  spotify <query> [-b]  - Search with Spotify.");
     print("");
+    print("Theme & Background", "highlight");
+    print("  theme <theme_name>    - Change terminal theme (default, ubuntu, powershell, cmd, kali, debian).");
+    print("  uploadbg              - Upload a custom background image.");
+    print("  setbg [clear|<opacity>] - Set or clear custom background image or set opacity (0-1).");
+    print("  setbgAPI <url>        - Set a random background image API URL for default image.");
+    print("");
 
     print("Navigation & Bookmarks", "highlight");
     print("  goto <url> [-b]       - Navigate to a specific URL.");
@@ -736,6 +839,9 @@ const commands = {
     print("  cd ..                 - Go to parent directory.");
     print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("  pwd                   - Show current bookmark path.");
+    print("  mkdir <folder>   - Create a new bookmark folder.");
+    print("  rm [-r] [-f] <folder / file>   - Remove a bookmark or folder.");
+    print("  rmdir <folder>   - Remove an empty bookmark folder.");
     print("");
 
     print("Account Management", "highlight");
@@ -1059,6 +1165,7 @@ function awaiting() {
   typedText.innerHTML = "";
   // blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
+  blockCursor.classList.add('no-blink');  // Disable blinking while awaiting command completion
 }
 
 function done() {
@@ -1071,6 +1178,7 @@ function done() {
     typedText.focus();
     setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
   }
+  blockCursor.classList.remove('no-blink'); // Re-enable blinking
 }
 
 // SETTINGS 
@@ -1142,7 +1250,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -1190,7 +1298,31 @@ async function loadSettings() {
       print(`Welcome back, ${user_info}`, "success");
     }
   }
+
+  const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  
+  if (data.theme) {
+    promptTheme = data.theme;
+  }
+  console.log(data.imgAPI);
+  if (data.imgAPI) {
+    promptBgRandomAPI = data.imgAPI;
+    console.log("Background image API set to:", promptBgRandomAPI);
+  }
+  if (localData.customBackground) {
+    // promptBg = localData.customBackground;
+    promptOpacity = data.background_opacity;
+    applyTheme(data.theme);
+    applyBackground(localData.customBackground, data.background_opacity);
+  } else {
+    promptOpacity = data.background_opacity;
+    applyTheme(promptTheme);
+    applyBackground(null, promptOpacity); // Apply default background
+  }
+
+  bgUploadInput.addEventListener('change', handleFileSelect);
 }
+
 
 function clearOutput() {
   output.innerHTML = "";
@@ -1204,6 +1336,15 @@ function clearOutput() {
 
 // --- Keyboard Listeners ---
 document.body.addEventListener("keydown", e => {
+  // IO operations
+
+  // Stop cusor blinking when typing
+  blockCursor.classList.add('no-blink');
+  // after 2 seconds, re-enable blinking
+  setTimeout(() => {
+    blockCursor.classList.remove('no-blink');
+  }, 1200);
+
   if (e.key === "Control" || e.key === "Meta") {
     control_cmd = true;
     return;
@@ -1652,6 +1793,54 @@ document.body.addEventListener("click", function(event) {
       // For simplicity, if they click typedText, it should gain focus. updateInputDisplay will handle caret.
   }
 });
+
+// Background and Theme 
+function applyTheme(themeName) {
+    document.body.className = `theme-${themeName}`;
+    promptTheme = themeName;
+    saveTheme();
+}
+
+function saveTheme() {
+  chrome.storage.sync.set({ theme: promptTheme });
+}
+
+function applyBackground(imageDataUrl, opacity) {
+    if (imageDataUrl) {
+        backgroundContainer.style.backgroundImage = `url(${imageDataUrl})`;
+        backgroundContainer.style.opacity = opacity;
+        promptOpacity = opacity;
+    } else {
+        // Apply default background or clear it
+        // backgroundContainer.style.backgroundImage = `url('https://pic.re/image')`;
+        // backgroundContainer.style.backgroundImage = `url('https://rpic.origz.com/api.php?category=pixiv')`;
+        backgroundContainer.style.backgroundImage = `url('${promptBgRandomAPI}')`;
+        backgroundContainer.style.opacity = promptOpacity;
+    }
+}
+
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const imageDataUrl = e.target.result;
+            // 使用 chrome.storage.local，因为它有更大的存储空间 (5MB)
+            if (imageDataUrl.length > 5 * 1024 * 1024) {
+                print("Error: Image is too large (max 5MB).", "error");
+                done();
+                return;
+            }
+            chrome.storage.local.set({ customBackground: imageDataUrl }, () => {
+                print("Background image uploaded successfully.", "success");
+                print("Use 'setbg' to apply it.", "hint");
+            });
+        };
+        reader.readAsDataURL(file);
+    }
+    done();
+}
+
 
 const inputLine = document.getElementById("input-line"); // Cache for click listener
 

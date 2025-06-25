@@ -1,11 +1,100 @@
-/* existing styles from style.css */
+:root {
+  --background-color: #0c0c0c;
+  --foreground-color: #f6f6f6;
+  --prompt-color: #f6f6f6;
+  --cursor-color: #f6f6f6;
+  --selection-background: #f6f6f6;
+  --selection-foreground: #0c0c0c;
+  --folder-color: #4b92ef;
+  --exec-color: #73d216;
+  --error-color: #ef2929;
+  --warning-color: #fce94f;
+  --success-color: #8ae234;
+  --highlight-color: #d9a1d2;
+  --hint-color: #87baf0;
+  --placeholder-color: #888a85;
+
+  /* Prompt specific colors */
+  --prompt-user-color: #cccccc;
+  --prompt-host-color: #cccccc;
+  --prompt-path-color: #cccccc;
+  --prompt-char-color: #cccccc;
+  --prompt-extra-color: #cccccc;
+}
+
 body {
   margin: 0;
   background-color: #000;
   color: rgb(255, 255, 255);
-  font-family: monospace;
+  /* font-family: monospace; */
+  font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
   font-size: 1rem;
   min-height: 100vh;
+}
+
+#background-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1; /*Make sure it stays behind everything else*/
+  /* background-image: url('https://pic.re/image'); */
+  background-size: cover;
+  background-position: center;
+  transition: opacity 0.5s ease-in-out;
+  opacity: 0.15; /* Default transparent background */
+}
+
+body.theme-ubuntu {
+  --background-color: #300a24;
+  --foreground-color: #d3d7cf;
+  --folder-color: #729fcf;
+  --prompt-user-color: #8ae234; /* Green */
+  --prompt-host-color: #8ae234; /* Green */
+  --prompt-path-color: #729fcf; /* Blue */
+  --prompt-char-color: #d3d7cf; /* White */
+}
+
+/* PowerShell Theme */
+body.theme-powershell {
+  --background-color: #012456;
+  --foreground-color: #cccccc;
+  --folder-color: #ffff00;
+  --prompt-extra-color: #0175c8; /* Blue for 'PS' */
+  --prompt-path-color: #ffff00; /* Yellow */
+  --prompt-char-color: #ffff00; /* Yellow */
+}
+
+/* Kali Linux Theme */
+body.theme-kali {
+  --background-color: #0c0c0c;
+  --foreground-color: #d9d9d9;
+  --folder-color: #0095ff;
+  --prompt-extra-color: #0095ff;  /* Blue for brackets */
+  --prompt-user-color: #0095ff;   /* Blue */
+  --prompt-host-color: #0095ff;   /* Blue */
+  --prompt-path-color: #ffffff;   /* White */
+  --prompt-char-color: #ff321f;   /* Red for '$' */
+}
+
+/* Debian Theme */
+body.theme-debian {
+  --background-color: #1e1e1e;
+  --foreground-color: #d0d0d0;
+  --folder-color: #87afd7;
+  --prompt-user-color: #5fafff; /* Light Blue */
+  --prompt-host-color: #afd787; /* Light Green */
+  --prompt-path-color: #ffaf00; /* Orange */
+  --prompt-char-color: #d0d0d0; /* White */
+}
+
+/* CMD Theme (for completeness) */
+body.theme-cmd {
+  --background-color: #000000;
+  --foreground-color: #c0c0c0;
+  --prompt-path-color: #c0c0c0;
+  --prompt-char-color: #c0c0c0;
 }
 
 .terminal {
@@ -31,6 +120,7 @@ body {
   outline: none;
   user-select: none;
   caret-color: transparent;
+  color: var(--prompt-color);
 
   line-height: 1.1;
 }
@@ -54,13 +144,13 @@ body {
 .output-line-powershell {
   line-height: 1.1;
   font-size: 16px;
-  font-family: Consolas, monospace;
+  /* font-family: Consolas, monospace; */
 }
 
 /* This is the style for the character AT the cursor position (in-text cursor) */
 .highlighted-char {
-  background-color: rgb(255, 255, 255); /* Green background, like the block cursor */
-  color: #000000;           /* Black text */
+  background-color: var(--cursor-color); /* Green background, like the block cursor */
+  color: var(--background-color);       /* Black text */
   /* animation: blink 1s steps(2, start) infinite; */
   display: inline-block; /* Ensures background covers the char properly */
   /* If you want it to look like a selection, revert to:
@@ -73,12 +163,12 @@ body {
 /* Style for IME composing text */
 .composing-text {
   text-decoration: underline;
-  background-color: #ffffff; /* Slightly different background during composition */
-  color: #000000;
+  /* background-color: #ffffff; /* Slightly different background during composition */
+  /* color: #000000; */
 }
 
 
-.output-info {
+/* .output-info {
   color: #fff;
 }
 
@@ -96,28 +186,39 @@ body {
 
 .output-file {
   color: #ffffff;
-}
+} */
 
-.output-exec {
-  color: #00a000; /* Green for executables */
+/* .output-exec {
+  color: #00a000; 
 
-}
+} */
 
-.output-success {
+/* .output-success {
   color: #00ff00;
-}
+} */
 
-.output-highlight {
-  color: #ff00ff; /* Magenta for highlighted text */
-}
+/* .output-highlight {
+  color: #ff00ff;
+} */
 
-.output-hint {
-  color: #00ffff; /* Cyan for hints */
-}
+/* .output-hint {
+  color: #00ffff;
+} */
 
-.output-placeholder {
+/* .output-placeholder {
   color: #a1a1a1;
-}
+} */
+
+.output-info { color: var(--foreground-color); }
+.output-warning { color: var(--warning-color); }
+.output-error { color: var(--error-color); }
+.output-folder { color: var(--folder-color); }
+.output-file { color: var(--foreground-color); }
+.output-exec { color: var(--exec-color); }
+.output-success { color: var(--success-color); }
+.output-highlight { color: var(--highlight-color); }
+.output-hint { color: var(--hint-color); }
+.output-placeholder { color: var(--placeholder-color); }
 
 .input-line {
   display: flex;
@@ -128,6 +229,7 @@ body {
 
 .prompt {
   margin-right: 0.55rem;
+  color: var(--prompt-color);
   align-self: flex-start; /* Keep if you want prompt at top if line wraps (though input shouldn't wrap like this) */
 }
 
@@ -135,15 +237,23 @@ body {
   display: inline-block; /* Will be toggled by JS */
   width: 1ch; /* or use font-metric based width if possible */
   line-height: 1.1;
+  background-color: var(--cursor-color);
+  animation: blink 1s steps(2, start) infinite;
+
   /* background-color: rgb(255, 255, 255); */
   /* animation: blink 1s steps(2, start) infinite; */
   /* margin-left: -1px; /* Optional: slight adjustment if needed */
 }
 
+.cursor.no-blink {
+  animation: none;
+}
+
 @keyframes blink {
   to {
-    background-color: black;
-    color: inherit; /* Ensure text color reverts if highlighted-char also uses this */
+    /* color: transparent;
+    background-color: transparent; */
+    display: none;
   }
 }
 
@@ -153,11 +263,11 @@ body {
 }
 
 ::selection {
-  background-color: #ffffff;
-  color: #000000;
+  background-color: var(--selection-background);
+  color: var(--selection-foreground);
 }
 
 ::-moz-selection {
-  background-color: #ffffff;
-  color: #000000;
+  background-color: var(--selection-background);
+  color: var(--selection-foreground);
 }
