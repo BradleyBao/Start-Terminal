@@ -1333,17 +1333,20 @@ function clearOutput() {
   done(); // Redraw prompt and input display
 }
 
+function typingIO_cursor() {
+  blockCursor.classList.add('no-blink');
+  // after 2 seconds, re-enable blinking
+  setTimeout(() => {
+    blockCursor.classList.remove('no-blink');
+  }, 100);
+}
 
 // --- Keyboard Listeners ---
 document.body.addEventListener("keydown", e => {
   // IO operations
 
   // Stop cusor blinking when typing
-  blockCursor.classList.add('no-blink');
-  // after 2 seconds, re-enable blinking
-  setTimeout(() => {
-    blockCursor.classList.remove('no-blink');
-  }, 1200);
+  
 
   if (e.key === "Control" || e.key === "Meta") {
     control_cmd = true;
@@ -1574,6 +1577,7 @@ if (e.key === "Tab") {
       // Basic backspace, could be enhanced for ^H like behavior if needed
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
+      typingIO_cursor();
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -1602,6 +1606,7 @@ if (e.key === "Tab") {
 
   } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     e.preventDefault();
+    typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -1821,6 +1826,7 @@ function applyBackground(imageDataUrl, opacity) {
 
 function handleFileSelect(event) {
     const file = event.target.files[0];
+    console.log(file);
     if (file && file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => {

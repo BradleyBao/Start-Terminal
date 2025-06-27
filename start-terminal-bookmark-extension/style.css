@@ -253,7 +253,8 @@ body.theme-cmd {
   to {
     /* color: transparent;
     background-color: transparent; */
-    display: none;
+    /* display: none; */
+    visibility: hidden;
   }
 }
 
