@@ -20,6 +20,9 @@
   --prompt-path-color: #cccccc;
   --prompt-char-color: #cccccc;
   --prompt-extra-color: #cccccc;
+
+  /* Terminal Fonts */
+  --terminal-font: 'Consolas', 'Menlo', 'Courier New', monospace;
 }
 
 body {
@@ -27,7 +30,7 @@ body {
   background-color: #000;
   color: rgb(255, 255, 255);
   /* font-family: monospace; */
-  font-family: 'Cascadia Code', 'Consolas', 'Menlo', monospace;
+  font-family: var(--terminal-font); 
   font-size: 1rem;
   min-height: 100vh;
 }
@@ -54,6 +57,7 @@ body.theme-ubuntu {
   --prompt-host-color: #8ae234; /* Green */
   --prompt-path-color: #729fcf; /* Blue */
   --prompt-char-color: #d3d7cf; /* White */
+  --terminal-font: 'Ubuntu Mono', monospace;
 }
 
 /* PowerShell Theme */
@@ -64,6 +68,8 @@ body.theme-powershell {
   --prompt-extra-color: #0175c8; /* Blue for 'PS' */
   --prompt-path-color: #ffff00; /* Yellow */
   --prompt-char-color: #ffff00; /* Yellow */
+  --terminal-font: 'Cascadia Code', monospace;
+  font-variant-ligatures: none;
 }
 
 /* Kali Linux Theme */
@@ -76,6 +82,8 @@ body.theme-kali {
   --prompt-host-color: #0095ff;   /* Blue */
   --prompt-path-color: #ffffff;   /* White */
   --prompt-char-color: #ff321f;   /* Red for '$' */
+  --terminal-font: 'Hack', monospace;
+
 }
 
 /* Debian Theme */
@@ -87,6 +95,7 @@ body.theme-debian {
   --prompt-host-color: #afd787; /* Light Green */
   --prompt-path-color: #ffaf00; /* Orange */
   --prompt-char-color: #d0d0d0; /* White */
+  --terminal-font: 'Ubuntu Mono', monospace;
 }
 
 /* CMD Theme (for completeness) */
@@ -95,6 +104,7 @@ body.theme-cmd {
   --foreground-color: #c0c0c0;
   --prompt-path-color: #c0c0c0;
   --prompt-char-color: #c0c0c0;
+  --terminal-font: 'Consolas', 'Courier New', monospace;
 }
 
 .terminal {

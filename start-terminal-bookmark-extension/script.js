@@ -9,8 +9,10 @@ const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
-var control_cmd = false;
-var commanding = false;
+let control_cmd = false;
+let commanding = false;
+let input_mode = false;
+let user_input_content = "";
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
@@ -811,6 +813,32 @@ const commands = {
   mslogout: () => {
     logoutWithMicrosoft();
   },
+  apt: (args) => {
+    if (args.length === 0) {
+      return;
+    }
+    let arg = args[0];
+    if (arg == "update") {
+      awaiting();
+      checkForUpdates();
+    } else if (arg == "upgrade") {
+      awaiting();
+      applyUpdates();
+    }
+  },
+  "apt-get": (args) => {
+    if (args.length === 0) {
+      return;
+    }
+    let arg = args[0];
+    if (arg == "update") {
+      awaiting();
+      checkForUpdates();
+    } else if (arg == "upgrade") {
+      awaiting();
+      applyUpdates();
+    }
+  },
   help: () => {
     print("");
     print("--- Terminal Help ---", "highlight");
@@ -858,7 +886,12 @@ const commands = {
 
     print("Settings & Features", "highlight");
     print("  default <engine|on|off> - Set default search engine or toggle default mode.");
-    print("  * All settings, command history, output history, and login status are saved automatically.");
+    print("  * All settings, command history, output history, and login status are saved automatically.", "hint");
+    print("");
+
+    print("Extension", "highlight");
+    print("  apt update            - Check for new extension updates from the store.");
+    print("  apt upgrade           - Apply a downloaded update and reload the extension.");
     print("");
 
     print("Command Options", "highlight");
@@ -870,6 +903,7 @@ const commands = {
   },
 };
 
+// Alias 
 commands.yt = commands.youtube;
 
 function parseCommandLine(input) {
@@ -1346,6 +1380,32 @@ document.body.addEventListener("keydown", e => {
   // IO operations
 
   // Stop cusor blinking when typing
+
+  // if user input mode 
+  if (input_mode) {
+    if (e.key === "Backspace") {
+    e.preventDefault();
+    if (cursorPosition > 0) {
+      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
+      // Basic backspace, could be enhanced for ^H like behavior if needed
+      buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
+      cursorPosition--;
+      typingIO_cursor();
+      updateInputDisplay();
+    }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    user_input_content = buffer;
+
+  } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+    e.preventDefault();
+    typingIO_cursor();
+    buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
+    cursorPosition++;
+    updateInputDisplay();
+  }
+    return 
+  }
   
 
   if (e.key === "Control" || e.key === "Meta") {
@@ -1773,7 +1833,8 @@ function detectBrowser() {
 }
 
 function welcomeMsg() {
-    print(`Terminal Startup - ${detectBrowser()}`);
+    const manifest = chrome.runtime.getManifest(); // 获取 manifest 数据
+    print(`Terminal Startup v${manifest.version} - ${detectBrowser()}`);
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
@@ -1847,6 +1908,83 @@ function handleFileSelect(event) {
     done();
 }
 
+function checkForUpdates() {
+  try {
+    // 1. Check for update request 
+    chrome.runtime.requestUpdateCheck((status, details) => {
+      if (status === "update_available") {
+        print(`Get: Update found (version ${details.version}).`, "success");
+        print(``)
+        // The update will be downloaded. The onUpdateAvailable listener will handle the next step.
+      } else if (status === "no_update") {
+        print(`Hit: ${details.version} found`, "info")
+        console.log("No new update found."); //不在终端显示，保持整洁
+      } else if (status === "throttled") {
+        print("Update check is throttled. Please try again later.", "warning");
+      }
+      done();
+      print("");
+    });
+
+  } catch (e) {
+    // console.warn("Update check failed. This is expected if the extension is not installed from the store.", e);
+    print(e, "error");
+    print("Check Failed: This is expected if the extension is not installed from the store.", "error");
+    done();
+  }
+}
+
+async function applyUpdates() {
+  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y|n] ");
+  print(`Extension needs to be reloaded to update, reload now? [Y|n] ${user_input_content}`)
+  if (result) {
+    chrome.runtime.onUpdateAvailable.addListener((details) => {
+      print(`Fetched: ${details.version}`, 'info');
+      chrome.runtime.reload();
+    });
+  } else {
+    print("Abort")
+  }
+  done();
+  
+
+}
+
+function userInputMode(query) {
+  user_input_content = "";
+  return new Promise((resolve) => {
+    // 设置UI
+    input_mode = true;
+    awaiting();
+    promptSymbol.style.display = "inline-block";
+    promptSymbol.textContent = query;
+
+    // 启动一个定时器来检查用户输入
+    const intervalId = setInterval(() => {
+      const current = user_input_content.trim().toLowerCase(); // 获取输入并规范化
+      
+      if (current === ""){
+        
+      }
+      else if (current.toLowerCase() === "y") {
+        clearInterval(intervalId); // 重要！停止定时器，防止内存泄漏
+        input_mode = false;
+        buffer = "";
+        resolve(true); // 使用 resolve 来兑现承诺，并传递 true
+      } else if (current.toLowerCase() === "n") {
+        clearInterval(intervalId); // 重要！停止定时器
+        input_mode = false;
+        buffer = "";
+        resolve(false); // 使用 resolve 来兑现承诺，并传递 false
+      } else {
+        clearInterval(intervalId); // 重要！停止定时器
+        input_mode = false;
+        buffer = "";
+        resolve(false);
+      }
+    }, 100); // 100ms的间隔通常足够了，不必过于频繁
+  });
+}
 
 const inputLine = document.getElementById("input-line"); // Cache for click listener
 
