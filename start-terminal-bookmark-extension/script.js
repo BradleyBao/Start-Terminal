@@ -5,6 +5,11 @@ const typedText = document.getElementById("typedText"); // This will show text b
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
 const terminal = document.getElementById("terminal");
 const promptSymbol = document.getElementById("promptSymbol");
+const suggestionsContainer = document.getElementById("autocomplete-suggestions");
+const editorView = document.getElementById("editor-view");
+const editorTitleInput = document.getElementById("editor-title");
+const editorUrlInput = document.getElementById("editor-url"); 
+const editorStatus = document.getElementById("editor-status"); 
 const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
@@ -16,8 +21,15 @@ let user_input_content = "";
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
+
+
+let isEditing = false; 
+let editingBookmarkId = null; 
+
 let default_mode = false;
 let default_search_engine = "google";
+
+let aliases = {};
 
 let user = ""
 
@@ -315,6 +327,23 @@ function listChildren(options) {
   
 }
 
+// In script.js, place this before the 'const commands = { ... };' block
+
+const manPages = {
+  "ls": "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.",
+  "cd": "NAME\n  cd - change the current directory\n\nSYNOPSIS\n  cd <directory>\n  cd ..\n\nDESCRIPTION\n  Change the current bookmark folder to <directory>. 'cd ..' moves to the parent folder.",
+  "mv": "NAME\n  mv - move (rename) files\n\nSYNOPSIS\n  mv <source> <destination>\n\nDESCRIPTION\n  Renames <source> to <destination>, or moves <source> into <destination> if <destination> is an existing folder.",
+  "cp": "NAME\n  cp - copy files and directories\n\nSYNOPSIS\n  cp [-r] <source> <destination>\n\nDESCRIPTION\n  Copies <source> to <destination>.\n\n  -r\tcopy directories recursively.",
+  "find": "NAME\n  find - search for files in a directory hierarchy\n\nSYNOPSIS\n  find [path] -name <pattern>\n\nDESCRIPTION\n  Searches for bookmarks/folders matching the <pattern> within the given [path] or current directory.\n  The pattern can include a wildcard '*' (e.g., 'find -name \"*search*\").",
+  "history": "NAME\n  history - display command history\n\nSYNOPSIS\n  history\n\nDESCRIPTION\n  Displays the list of previously executed commands.",
+  "alias": "NAME\n  alias - create a shortcut for a command\n\nSYNOPSIS\n  alias\n  alias <name>='<command>'\n\nDESCRIPTION\n  'alias' with no arguments prints the list of aliases.\n  'alias name='command'' defines an alias 'name' for 'command'. Quotes are important for commands with spaces.",
+  "touch": "NAME\n  touch - create a new, empty bookmark\n\nSYNOPSIS\n  touch <filename>\n\nDESCRIPTION\n  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.",
+  "man": "NAME\n  man - format and display the on-line manual pages\n\nSYNOPSIS\n  man <command>\n\nDESCRIPTION\n  Displays the manual page for a given command.",
+  "clear": "NAME\n  clear, cls - clear the terminal screen\n\nSYNOPSIS\n  clear\n  cls\n\nDESCRIPTION\n  Clears all previous output from the terminal screen.",
+  "editlink": "NAME\n  editlink - change the URL of a bookmark\n\nSYNOPSIS\n  editlink <bookmark_name> <new_url>\n\nDESCRIPTION\n  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.",
+
+};
+
 const previousCommands = [];
 let previousCommandIndex = 0;
 
@@ -569,20 +598,18 @@ const commands = {
   pwd: (args, options) => {
     return path.map(p => p.title || "/home").join("/") || "/";
   },
-  gh: () => location.href = "https://github.com",
   mkdir: (args) => {
     if (args.length === 0) {
       return "Usage: mkdir <directory_name>";
     }
-    const dirName = args.join(" "); // Folder name space allowed
+    const dirName = args.join(" ");
 
-    // Check already exists
     const existing = findChildByTitle(current.children || [], dirName);
     if (existing) {
       return `mkdir: cannot create directory '${dirName}': File exists`;
     }
 
-    awaiting(); // waiting for command to finish
+    awaiting();
     chrome.bookmarks.create(
       {
         parentId: current.id,
@@ -593,72 +620,59 @@ const commands = {
           print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
         } else {
           print(`Directory '${newFolder.title}' created.`);
-          // Refresh current children
+          // 刷新当前节点的子节点列表以保持同步
           chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX: Update the node in the path array
             }
+            print("");
+            done(); // <-- THE FIX: Call done() inside the async callback
           });
         }
-        print("");
-        done();
       }
     );
   },
-  rm: (args, options) => {
+  // 在 script.js 中，替换旧的 rm 函数
+rm: (args, options) => {
     if (args.length === 0) {
       return "Usage: rm [-r] [-f] <name>";
     }
-    const targetName = args.join(" "); // 支持带空格的名称
-
+    const targetName = args.join(" ");
     const target = findChildByTitleFileOrDir(current.children || [], targetName);
 
-    // 情况1: 目标不存在
     if (!target) {
-      if (options.f) return; // -f (force) 选项：如果不存在，则静默处理，不做任何事
-      print(`rm: cannot remove '${targetName}': No such file or directory`, "error");
-      return;
+      if (options.f) return;
+      return `rm: cannot remove '${targetName}': No such file or directory`;
     }
 
     const isDirectory = !!target.children;
     const isRecursive = !!options.r;
 
-    console.log(isDirectory, isRecursive);
-
-    // 情况2: 使用 -r (递归删除)
     if (isRecursive) {
-      // rm -r 可以删除文件或目录
       awaiting();
-      // chrome.bookmarks.removeTree 会删除一个文件夹及其所有子内容
-      // 对单个书签使用它，效果和 chrome.bookmarks.remove 一样
       chrome.bookmarks.removeTree(target.id, () => {
         if (chrome.runtime.lastError) {
           print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
         } else {
           print(`Recursively removed '${targetName}'.`);
-          // 刷新当前节点的子节点列表以保持同步
           chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
           });
         }
-        print("");
-        done();
       });
-      return; // 异步处理，提前返回
+      return;
     }
 
-    // 情况3: 不使用 -r
-    if (isDirectory) {
-      // 如果是目录但没有-r选项，则必须为空才能删除
-      if (target.children.length > 0) {
-        return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
-      }
-      // 如果是空目录，则可以删除
+    if (isDirectory && target.children.length > 0) {
+      return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
     }
 
-    // 执行删除 (单个书签 或 空目录)
     awaiting();
     chrome.bookmarks.remove(target.id, () => {
       if (chrome.runtime.lastError) {
@@ -668,26 +682,27 @@ const commands = {
         chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
           });
       }
-      print("");
-      done();
     });
   },
-  rmdir: (args) => {
+
+rmdir: (args) => {
     if (args.length === 0) {
       return "Usage: rmdir <directory_name>";
     }
     const dirName = args.join(" ");
-    
     const target = findChildByTitleFileOrDir(current.children || [], dirName);
 
     if (!target) {
       return `rmdir: failed to remove '${dirName}': No such directory`;
     }
-    if (!target.children) { // 这是一个书签文件
-        return `rmdir: failed to remove '${dirName}': Not a directory`;
+    if (!target.children) {
+      return `rmdir: failed to remove '${dirName}': Not a directory`;
     }
     if (target.children.length > 0) {
       return `rmdir: failed to remove '${dirName}': Directory not empty`;
@@ -699,15 +714,15 @@ const commands = {
         print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
       } else {
         print(`Removed directory '${dirName}'.`);
-        // 刷新当前节点的子节点列表
         chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
         });
       }
-      print("");
-      done();
     });
   },
   // Theme 
@@ -874,6 +889,255 @@ const commands = {
       applyUpdates();
     }
   },
+  history: () => {
+    if (previousCommands.length === 0) {
+      return "No history yet.";
+    }
+    previousCommands.forEach((cmd, index) => {
+      // Right-align index for better readability
+      const paddedIndex = String(index + 1).padStart(3, ' ');
+      print(`${paddedIndex}  ${cmd}`);
+    });
+    return "";
+  },
+
+  // 在 script.js 中，替换旧的 touch 函数
+touch: (args) => {
+    if (args.length === 0) {
+      return "Usage: touch <filename>";
+    }
+    const filename = args.join(" ");
+    const existing = findChildByTitleFileOrDir(current.children || [], filename);
+
+    if (existing) {
+      return;
+    }
+
+    awaiting();
+    chrome.bookmarks.create({
+      parentId: current.id,
+      title: filename,
+      url: "about:blank#touched"
+    }, (newItem) => {
+      if (chrome.runtime.lastError) {
+        print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        done();
+      } else {
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+          if (results && results[0]) {
+            current = results[0];
+            path[path.length - 1] = current; // <-- THE FIX
+          }
+          done(); // <-- THE FIX
+        });
+      }
+    });
+},
+editlink: (args) => {
+    if (args.length < 2) {
+      return "Usage: editlink <bookmark_name> <new_url>";
+    }
+    // The first argument is the name, the rest is the URL
+    const bookmarkName = args.shift(); 
+    const newUrl = args.join(' ');
+
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) {
+      return `editlink: '${bookmarkName}': No such file or bookmark.`;
+    }
+    if (target.children) {
+      return `editlink: '${bookmarkName}': Is a directory, cannot set a URL.`;
+    }
+
+    awaiting();
+    chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
+      if (chrome.runtime.lastError) {
+        print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
+      } else {
+        print(`Updated link for '${updatedNode.title}'.`);
+        print(`New URL: ${updatedNode.url}`, "success");
+      }
+      
+      // Refresh current directory to get the updated node data
+      chrome.bookmarks.getSubTree(current.id, (results) => {
+          if (results && results[0]) {
+              current = results[0];
+              path[path.length - 1] = current;
+          }
+          print("");
+          done();
+      });
+    });
+},
+
+// 在 script.js 中，替换旧的 mv 函数
+mv: (args) => {
+    if (args.length < 2) {
+      return "Usage: mv <source> <destination>";
+    }
+    const sourceName = args[0];
+    const destName = args[1];
+    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+    if (!sourceNode) {
+      return `mv: cannot stat '${sourceName}': No such file or directory`;
+    }
+    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
+
+    awaiting();
+    const refreshAndDone = () => {
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+                current = results[0];
+                path[path.length - 1] = current; // <-- THE FIX
+            }
+            done(); // <-- THE FIX
+        });
+    };
+    
+    if (destNode && destNode.children) {
+      chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
+        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        refreshAndDone();
+      });
+    } else {
+      chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
+        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        refreshAndDone();
+      });
+    }
+},
+
+// 在 script.js 中，替换旧的 cp 函数
+cp: async (args, options) => {
+    if (args.length < 2) {
+      return "Usage: cp [-r] <source> <destination>";
+    }
+    const sourceName = args[0];
+    const destName = args[1];
+    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+    if (!sourceNode) {
+      return `cp: cannot stat '${sourceName}': No such file or directory`;
+    }
+    if (sourceNode.children && !options.r) {
+      return `cp: -r not specified; omitting directory '${sourceName}'`;
+    }
+    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
+    
+    awaiting();
+    try {
+      if (destNode && destNode.children) {
+        await copyNodeRecursively(sourceNode, destNode.id);
+      } else {
+        await copyNodeRecursively(sourceNode, current.id, destName);
+      }
+      
+      const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
+      if (results && results[0]) {
+          current = results[0];
+          path[path.length - 1] = current; // <-- THE FIX
+      }
+    } catch (e) {
+      print(`Error copying: ${e.message}`, "error");
+    }
+    done(); // <-- THE FIX (already well-placed in this async function)
+},
+
+  find: (args, options) => {
+    if (args.length == 0) {
+      return "Usage: find -name <pattern>";
+    }
+    const namePattern = args.join(" ");
+    const regex = new RegExp(namePattern.replace(/\*/g, '.*'), 'i');
+
+    print(`Searching for '${namePattern}'...`);
+    awaiting();
+    if (current.children) {
+        // Start the search on each child of the current directory
+        current.children.forEach(child => {
+            findRecursive(child, '.', regex);
+        });
+    }
+    done();
+    return ""; // Signal command completion
+  },
+
+  alias: (args) => {
+      if (args.length === 0) {
+          if (Object.keys(aliases).length === 0) {
+              return "No aliases defined.";
+          }
+          print("Current aliases:", "highlight");
+          for (const name in aliases) {
+              print(`  alias ${name}='${aliases[name]}'`);
+          }
+          return;
+      }
+
+      const aliasDef = args.join(' ');
+      const match = aliasDef.match(/^([^=]+)='(.+)'$/);
+
+      if (!match) {
+          return "Usage: alias name='command'";
+      }
+
+      const name = match[1];
+      const command = match[2];
+      aliases[name] = command;
+      chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      return `Alias '${name}' set.`;
+  },
+  
+  man: (args, options) => {
+      if (args.length === 0) {
+          return "What manual page do you want?";
+      }
+      const page = args[0];
+      const content = manPages[page];
+
+      if (!content) {
+          return `No manual entry for ${page}`;
+      }
+
+      // Print with pre-wrap to respect newlines in the man page content
+      const lines = content.split('\n');
+      lines.forEach(line => {
+        // Simple formatting for headings (uppercase)
+        if (line === line.toUpperCase() && line.length > 2) {
+             print(line, "highlight");
+        } else {
+             print(line);
+        }
+      });
+  },
+  nano: (args) => {
+    if (args.length === 0) {
+      return "Usage: nano <bookmark_name>";
+    }
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) {
+      return `nano: '${bookmarkName}': No such file or bookmark.`;
+    }
+    if (target.children) {
+      return `nano: '${bookmarkName}': Is a directory.`;
+    }
+
+    // Enter editing mode
+    isEditing = true;
+    editingBookmarkId = target.id;
+
+    // Populate the editor fields
+    editorTitleInput.value = target.title;
+    editorUrlInput.value = target.url;
+    editorStatus.textContent = `Editing: ${target.title}`;
+
+    // Switch views
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+    editorTitleInput.focus();
+},
   help: () => {
     print("");
     print("--- Terminal Help ---", "highlight");
@@ -887,54 +1151,48 @@ const commands = {
     print("  bilibili <query> [-b] - Search with Bilibili.");
     print("  spotify <query> [-b]  - Search with Spotify.");
     print("");
-    print("Theme & Background", "highlight");
-    print("  theme <theme_name>    - Change terminal theme (default, ubuntu, powershell, cmd, kali, debian).");
-    print("  uploadbg              - Upload a custom background image.");
-    print("  setbg [clear|<opacity>] - Set or clear custom background image or set opacity (0-1).");
-    print("  setbgAPI <url>        - Set a random background image API URL for default image.");
-    print("");
-
+    
     print("Navigation & Bookmarks", "highlight");
-    print("  goto <url> [-b]       - Navigate to a specific URL.");
-    print("  gh                    - Navigate to GitHub.");
-    print("  ls                    - List bookmarks and folders in current directory.");
+    print("  ls [-l]               - List bookmarks in current directory.");
     print("  cd <folder>           - Change directory to a bookmark folder.");
     print("  cd ..                 - Go to parent directory.");
-    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("  pwd                   - Show current bookmark path.");
-    print("  mkdir <folder>   - Create a new bookmark folder.");
-    print("  rm [-r] [-f] <folder / file>   - Remove a bookmark or folder.");
-    print("  rmdir <folder>   - Remove an empty bookmark folder.");
+    print("  goto <url> [-b]       - Navigate to a specific URL.");
+    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("");
 
-    print("Account Management", "highlight");
+    print("File & Directory Operations", "highlight");
+    print("  mkdir <folder>        - Create a new bookmark folder.");
+    print("  touch <file>          - Create a new, empty bookmark.");
+    print("  mv <src> <dest>       - Move or rename a bookmark/folder.");
+    print("  cp [-r] <src> <dest>  - Copy a bookmark or folder.");
+    print("  rm [-r] <name>        - Remove a bookmark or folder.");
+    print("  rmdir <folder>        - Remove an empty bookmark folder.");
+    print("  find [-name <pat>]    - Find bookmarks/folders by name.");
+    print("  nano <file>           - Edit a bookmark.");
+    print("  editlink <file>       - Update a bookmark's url.");
+
+    print("");
+
+    print("Account & System", "highlight");
     print("  mslogin               - Log in with a Microsoft account.");
     print("  mslogout              - Log out from Microsoft account.");
-    print("");
-
-    print("Utility Commands", "highlight");
-    print("  ping <host> [-n <count>] [-t] - Ping a host.");
     print("  date                  - Show current date and time.");
     print("  clear (or cls)        - Clear the terminal screen.");
+    print("  ping <host>           - Ping a host.");
     print("  locale                - Show browser language settings.");
     print("");
-
-    print("Settings & Features", "highlight");
-    print("  default <engine|on|off> - Set default search engine or toggle default mode.");
-    print("  * All settings, command history, output history, and login status are saved automatically.", "hint");
+    
+    print("Customization & History", "highlight");
+    print("  theme <name>          - Change terminal theme.");
+    print("  uploadbg / setbg      - Manage custom background.");
+    print("  history               - Show command history.");
+    print("  alias [name='cmd']    - Create or list command aliases.");
+    print("  man <command>         - Show the manual page for a command.");
     print("");
 
-    print("Extension", "highlight");
-    print("  apt update            - Check for new extension updates from the store.");
-    print("  apt upgrade           - Apply a downloaded update and reload the extension.");
-    print("");
-
-    print("Command Options", "highlight");
-    print("  -b                    - Open search results or URL in a new background tab.");
-    print("  -n <count>            - (ping) Number of pings to send.");
-    print("  -t                    - (ping) Ping continuously until interrupted (Ctrl+C).");
-    print("");
-    return " "; // 返回一个空格以打印一个空行
+    print("For more details on a command, type: man <command_name>", "hint");
+    return ""; 
   },
 };
 
@@ -1192,6 +1450,17 @@ function processCommand(input) {
   const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
   print(`${full_path} ${displayInput}`); // Echo command
 
+  // --- ALIAS EXPANSION ---
+  const firstWord = input.split(' ')[0];
+  if (aliases[firstWord]) {
+      const aliasExpansion = aliases[firstWord];
+      const restOfInput = input.substring(firstWord.length).trim();
+      input = `${aliasExpansion} ${restOfInput}`.trim();
+      print(`> ${input}`, "hint"); // Show the expanded command
+  }
+  // --- END ALIAS EXPANSION ---
+
+
   const parsed = parseCommandLine(input);
   if (!parsed) {
       print("Invalid command syntax.", "error");
@@ -1336,7 +1605,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -1362,6 +1631,11 @@ async function loadSettings() {
       path = tempPath;
     }
   }
+
+  if (data.aliases) {
+    aliases = data.aliases;
+  }
+    
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
     default_search_engine = data.settings.default_search_engine ?? "google";
@@ -1427,8 +1701,56 @@ function typingIO_cursor() {
   }, 100);
 }
 
+// in script.js, can be placed near other helper functions
+
+function clearSuggestions() {
+  suggestionsContainer.innerHTML = "";
+  suggestionsContainer.style.display = "none";
+}
+
 // --- Keyboard Listeners ---
 document.body.addEventListener("keydown", e => {
+
+  if (isEditing) {
+    // Save: Ctrl+S or Cmd+S
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      const newTitle = editorTitleInput.value;
+      const newUrl = editorUrlInput.value;
+
+      editorStatus.textContent = "Saving...";
+      chrome.bookmarks.update(editingBookmarkId, { title: newTitle, url: newUrl }, (updatedNode) => {
+        if (chrome.runtime.lastError) {
+          editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+        } else {
+          editorStatus.textContent = `Saved: ${updatedNode.title}`;
+          // Refresh current directory silently in the background
+          chrome.bookmarks.getSubTree(current.id, (results) => {
+              if (results && results[0]) {
+                current = results[0];
+                path[path.length - 1] = current;
+              }
+          });
+        }
+      });
+    }
+
+    // Exit: Ctrl+X
+    if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+      e.preventDefault();
+      // Exit editing mode
+      isEditing = false;
+      editingBookmarkId = null;
+
+      // Switch views back
+      editorView.style.display = "none";
+      terminal.style.display = "block";
+      done();
+    }
+    return; // Stop further processing in editing mode
+  }
+
+
   // IO operations
 
   // Stop cusor blinking when typing
@@ -1446,10 +1768,12 @@ document.body.addEventListener("keydown", e => {
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
+    clearSuggestions(); 
     e.preventDefault();
     user_input_content = buffer;
 
   } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+    clearSuggestions(); 
     e.preventDefault();
     typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
@@ -1460,7 +1784,7 @@ document.body.addEventListener("keydown", e => {
   }
   
 
-  if (e.key === "Control" || e.key === "Meta") {
+  if (e.key === "Control") {
     control_cmd = true;
     return;
   }
@@ -1507,6 +1831,7 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "ArrowLeft") {
+    clearSuggestions(); 
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
@@ -1515,6 +1840,7 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "ArrowRight") {
+    clearSuggestions(); 
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
@@ -1567,12 +1893,16 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   
-  // --- Tab Autocompletion ---
-  // 替换你 script.js 文件中 document.body.addEventListener("keydown", e => { ... });
-// 内部的 if (e.key === "Tab") { ... } 代码块
-
-if (e.key === "Tab") {
+  if (e.key === "Tab") {
     e.preventDefault();
+    clearSuggestions();
+
+    // --- FIX: Define command categories for smarter filtering ---
+    const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
+    // For file-only commands, we add a special "./" type for executable bookmarks
+    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./"];
+    // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
+
     const relevantInput = buffer.substring(0, cursorPosition);
     const pre_parts = relevantInput.trimStart().split(/\s+/);
     let commandName = pre_parts[0] || "";
@@ -1583,10 +1913,16 @@ if (e.key === "Tab") {
     let effectiveCommandType = "";
     let startOfBaseArgumentStringInRelevantInput = 0;
 
+    const allCompletableCommands = [
+        ...DIR_ONLY_COMMANDS, 
+        ...FILE_ONLY_COMMANDS, 
+        "ls", "rm", "mv", "cp", "touch" // Manually add universal commands
+    ];
+
     if (commandName.startsWith("./")) {
-        effectiveCommandType = "./";
+        effectiveCommandType = "./"; // Use the special type we defined
         startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
-    } else if (["cd", "ls", "rm", "rmdir"].includes(commandName)) {
+    } else if (allCompletableCommands.includes(commandName)) {
         effectiveCommandType = commandName;
         startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
     } else {
@@ -1615,23 +1951,27 @@ if (e.key === "Tab") {
         .filter(child => {
             const title = child.title || "";
             if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-            if (effectiveCommandType === "cd" || effectiveCommandType === "rmdir") {
-                return !!child.children;
+
+            // --- FIX: New, smarter filtering logic based on command type ---
+            const isDirectory = !!child.children;
+
+            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) {
+                return isDirectory; // Must be a directory
             }
+            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) {
+                return !isDirectory; // Must be a file
+            }
+
+            // Default case for commands like ls, rm, mv, cp: show everything
             return true;
         })
         .map(child => child.title)
         .sort();
-
+    
+    // The rest of the logic for displaying matches remains the same...
     if (matches.length === 1) {
         const match = matches[0];
-        const matchedNode = currentContextChildren.find(c => c.title === match);
-        
-        let completion = match;
-        // --- 变化点 1: 将 "/" 改为 " " ---
-        if (matchedNode && matchedNode.children) {
-            completion += " "; // 如果是目录，补全后添加空格以便输入下一个参数
-        }
+        const completion = match + " ";
 
         const replaceFrom = startOfBaseArgumentStringInRelevantInput;
         const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
@@ -1656,17 +1996,17 @@ if (e.key === "Tab") {
             cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
             updateInputDisplay();
         }
-
-        print(full_path + " " + buffer);
+        
         let outputLineContent = "";
         matches.forEach(m => {
-            // --- 变化点 2: 不再显示 "/" ---
-            outputLineContent += m + "   "; // 只显示名称，用多个空格分隔
+             const matchedNode = currentContextChildren.find(c => c.title === m);
+             outputLineContent += (matchedNode && matchedNode.children ? m + "/" : m) + "   ";
         });
-        print(outputLineContent.trim(), "placeholder");
-        done();
+        
+        suggestionsContainer.textContent = outputLineContent.trim();
+        suggestionsContainer.style.display = "block";
     }
-    return; // 确保Tab键逻辑在此结束
+    return;
 }
 
 
@@ -1683,6 +2023,7 @@ if (e.key === "Tab") {
   if (isComposing) return;
 
   if (e.key === "Backspace") {
+    clearSuggestions(); 
     e.preventDefault();
     if (cursorPosition > 0) {
       const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
@@ -1693,6 +2034,7 @@ if (e.key === "Tab") {
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
+    clearSuggestions(); 
     e.preventDefault();
     if (promptSymbol.style.display === "none" && commanding) return;
 
@@ -1742,6 +2084,70 @@ function getChildrenAtPath(startDirNode, pathStr) {
         }
     }
     return currentDirNode.children;
+}
+
+// script.js
+
+// ... (after your findChildByTitleFileOrDir function is a good place) ...
+
+/**
+ * Recursively copies a bookmark node (file or folder).
+ * @param {object} sourceNode - The bookmark node to copy.
+ * @param {string} destParentId - The ID of the destination folder.
+ * @param {string} [newName=null] - Optional new name for the copied node.
+ */
+async function copyNodeRecursively(sourceNode, destParentId, newName = null) {
+  return new Promise((resolve, reject) => {
+    // For a single bookmark (file)
+    if (sourceNode.url) {
+      chrome.bookmarks.create({
+        parentId: destParentId,
+        title: newName || sourceNode.title,
+        url: sourceNode.url,
+      }, resolve);
+      return;
+    }
+
+    // For a folder
+    chrome.bookmarks.create({
+      parentId: destParentId,
+      title: newName || sourceNode.title,
+    }, (newFolder) => {
+      if (!sourceNode.children || sourceNode.children.length === 0) {
+        resolve(newFolder);
+        return;
+      }
+      // Recursively copy all children
+      const copyPromises = sourceNode.children.map(child =>
+        copyNodeRecursively(child, newFolder.id)
+      );
+      Promise.all(copyPromises).then(() => resolve(newFolder)).catch(reject);
+    });
+  });
+}
+
+/**
+ * Recursively finds files/folders matching a pattern.
+ * @param {object} startNode - The bookmark node to start searching from.
+ * @param {string} currentPath - The path string for the current node.
+ * @param {RegExp} regex - The regular expression to match against the title.
+ */
+function findRecursive(node, currentPath, regex) {
+  // Construct the relative path for the current node
+  const newPath = (currentPath === '.' ? './' : currentPath + '/') + node.title;
+
+  // Check if the current node's title matches the pattern
+  if (regex.test(node.title)) {
+    const className = node.children ? 'folder' : 'file';
+    print(newPath, className);
+  }
+
+  // If it's a directory, recurse into its children
+  if (node.children) {
+    node.children.forEach(child => {
+      findRecursive(child, newPath, regex);
+    });
+  }
 }
 
 
