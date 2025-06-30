@@ -743,6 +743,41 @@ const commands = {
         return;
     }
   },
+  tree: (args, options) => {
+    print(current.title || "~");
+    if (current.children && current.children.length > 0) {
+      current.children.forEach((child, index) => {
+        const isLast = index === current.children.length - 1;
+        displayTree(child, '', isLast);
+      });
+    }
+    return ""; // Return empty string for a clean prompt return
+  },
+  cat: (args, options) => {
+    if (args.length === 0) {
+      return "Usage: cat <bookmark_name>";
+    }
+    const targetName = args.join(" ");
+    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+
+    if (!target) {
+      return `cat: ${targetName}: No such file or directory`;
+    }
+
+    if (target.children) { // It's a directory
+      return `cat: ${targetName}: Is a directory`;
+    }
+
+    // It's a bookmark, print its details
+    print("--- Bookmark Details ---", "highlight");
+    print(`Title:    ${target.title}`);
+    print(`URL:      ${target.url}`);
+    if (target.dateAdded) {
+       print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
+    }
+    print("----------------------", "highlight");
+    return "";
+  },
 
   setbg: (args) => {
         const arg = args[0];
@@ -946,6 +981,23 @@ function logoutWithMicrosoft() {
       done();
     });
   }
+
+// Add this helper function somewhere in your script.
+function displayTree(node, prefix = '', isLast = true) {
+  const nodeName = node.title || (node.url ? 'Untitled Bookmark' : 'Unknown');
+  const connector = isLast ? '└── ' : '├── ';
+  const className = node.children ? 'folder' : (node.url && node.url.startsWith("javascript:") ? 'exec' : 'file');
+  print(`${prefix}${connector}${nodeName}`, className);
+
+  if (node.children && node.children.length > 0) {
+    const newPrefix = prefix + (isLast ? '    ' : '│   ');
+    node.children.forEach((child, index) => {
+      const last = index === node.children.length - 1;
+      displayTree(child, newPrefix, last);
+    });
+  }
+};
+
 
 async function ping_func(url, options) {
   print("");
