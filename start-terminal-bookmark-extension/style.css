@@ -138,10 +138,10 @@ body.theme-cmd {
 
 .output-line {
   white-space: pre-wrap;
-  /* word-break: break-word; */
-  word-break: break-word;
+  word-break: normal; 
   overflow-wrap: break-word;
   max-width: 100%;
+  position: relative;
 }
 
 .output-line-inline {
@@ -332,6 +332,23 @@ body.theme-cmd {
   min-height: 1.5rem;
   padding-top: 0.5rem;
   color: var(--success-color);
+}
+
+/* The main container for the ls grid output */
+.ls-grid-container {
+  display: grid;
+  /* Automatically create as many columns as can fit.
+     Each column will have a minimum width calculated by the script,
+     and will grow to fill any remaining space (1fr). */
+  gap: 0.5rem 1rem; /* Add some space between rows and columns */
+}
+
+/* Individual items within the grid */
+.ls-grid-item {
+  /* This helps prevent a single very long filename from breaking the layout */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 ::selection {
