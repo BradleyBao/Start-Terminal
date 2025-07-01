@@ -12,7 +12,13 @@
   "icons": {
     "128": "icons/icon128.png"
   },
-  "permissions": ["bookmarks", "identity", "storage"],
+  "permissions": [
+    "bookmarks", 
+    "identity", 
+    "storage", 
+    "tabs",
+    "downloads",
+    "downloads.open"],
   "host_permissions": [
     "https://login.microsoftonline.com/*",
     "https://graph.microsoft.com/*"

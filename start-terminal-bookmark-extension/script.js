@@ -25,6 +25,10 @@ let isComposing = false; // For IME input
 
 let isEditing = false; 
 let editingBookmarkId = null; 
+let outputHistory = [];
+
+let environmentVars = {};
+let wgetJobs = {};
 
 let default_mode = false;
 let default_search_engine = "google";
@@ -586,8 +590,70 @@ const commands = {
   cls: (args, options) => {
     clearOutput();
   },
-  ls: (args, options) => {
-    listChildren(options);
+  ls: (args, options, pipedInput) => {
+    // 1. Handle -l (long format)
+    if (options.l) {
+        if (!current || !current.children) return ["Error: current directory not available."];
+        return current.children.map(child => {
+            const owner = user || 'root';
+            const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+            const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+
+            const typeChar = child.children ? "d" : "-";
+            const date = new Date(child.dateAdded || child.dateGroupModified || Date.now()).toLocaleString('sv-SE').substring(0, 16);
+            const typeClass = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
+            
+            const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
+            const title = `<span class="output-line-inline output-${typeClass}">${escapeHtml(child.title)}</span>`;
+            return perms + title;
+        });
+    }
+
+    // 2. Standard multi-column layout
+    if (!current || !current.children || current.children.length === 0) return [];
+    
+    const items = current.children.map(child => ({
+        title: child.title,
+        className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
+    })).sort((a, b) => a.title.localeCompare(b.title));
+
+    // ★★★ FIX 1: Calculate width dynamically based on the actual terminal element ★★★
+    const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+    if (isNaN(terminalWidth) || terminalWidth <= 0) { // Fallback if calculation fails
+        return items.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
+    }
+
+    const longestItemWidth = items.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
+    const colWidth = longestItemWidth + 2;
+
+    let numCols = Math.floor(terminalWidth / colWidth);
+    if (numCols <= 1) { // Fallback to single column if it doesn't fit
+        return items.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
+    }
+    
+    // 4. Build multi-column HTML output
+    const numRows = Math.ceil(items.length / numCols);
+    const outputLines = [];
+
+    for (let row = 0; row < numRows; row++) {
+        let lineHtml = '';
+        for (let col = 0; col < numCols; col++) {
+            const index = row + col * numRows;
+            if (index < items.length) {
+                const item = items[index];
+                const title = escapeHtml(item.title);
+                const currentVisualWidth = getVisualWidth(item.title);
+                const paddingNeeded = colWidth - currentVisualWidth;
+                
+                // ★★★ FIX 2: Use non-breaking spaces (&nbsp;) for padding to prevent collapsing ★★★
+                const padding = '&nbsp;'.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
+                
+                lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
+            }
+        }
+        outputLines.push(lineHtml);
+    }
+    return outputLines;
   },
   cd: (args, options) => {
     if (!args) {
@@ -599,130 +665,129 @@ const commands = {
     return path.map(p => p.title || "/home").join("/") || "/";
   },
   mkdir: (args) => {
-    if (args.length === 0) {
-      return "Usage: mkdir <directory_name>";
-    }
-    const dirName = args.join(" ");
-
-    const existing = findChildByTitle(current.children || [], dirName);
-    if (existing) {
-      return `mkdir: cannot create directory '${dirName}': File exists`;
-    }
-
-    awaiting();
-    chrome.bookmarks.create(
-      {
-        parentId: current.id,
-        title: dirName,
-      },
-      (newFolder) => {
-        if (chrome.runtime.lastError) {
-          print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
-        } else {
-          print(`Directory '${newFolder.title}' created.`);
-          // 刷新当前节点的子节点列表以保持同步
-          chrome.bookmarks.getSubTree(current.id, (results) => {
-            if (results && results[0]) {
-              current = results[0];
-              path[path.length - 1] = current; // <-- THE FIX: Update the node in the path array
-            }
-            print("");
-            done(); // <-- THE FIX: Call done() inside the async callback
-          });
+    return new Promise((resolve) => {
+        if (args.length === 0) {
+            print("Usage: mkdir <directory_name>");
+            return resolve();
         }
-      }
-    );
-  },
-  // 在 script.js 中，替换旧的 rm 函数
-rm: (args, options) => {
-    if (args.length === 0) {
-      return "Usage: rm [-r] [-f] <name>";
-    }
-    const targetName = args.join(" ");
-    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+        const dirName = args.join(" ");
 
-    if (!target) {
-      if (options.f) return;
-      return `rm: cannot remove '${targetName}': No such file or directory`;
-    }
-
-    const isDirectory = !!target.children;
-    const isRecursive = !!options.r;
-
-    if (isRecursive) {
-      awaiting();
-      chrome.bookmarks.removeTree(target.id, () => {
-        if (chrome.runtime.lastError) {
-          print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
-        } else {
-          print(`Recursively removed '${targetName}'.`);
-          chrome.bookmarks.getSubTree(current.id, (results) => {
-            if (results && results[0]) {
-              current = results[0];
-              path[path.length - 1] = current; // <-- THE FIX
-            }
-            print("");
-            done(); // <-- THE FIX
-          });
+        const existing = findChildByTitle(current.children || [], dirName);
+        if (existing) {
+            print(`mkdir: cannot create directory '${dirName}': File exists`);
+            return resolve();
         }
-      });
-      return;
-    }
 
-    if (isDirectory && target.children.length > 0) {
-      return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
-    }
-
-    awaiting();
-    chrome.bookmarks.remove(target.id, () => {
-      if (chrome.runtime.lastError) {
-        print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
-      } else {
-        print(`Removed '${targetName}'.`);
-        chrome.bookmarks.getSubTree(current.id, (results) => {
-            if (results && results[0]) {
-              current = results[0];
-              path[path.length - 1] = current; // <-- THE FIX
+        chrome.bookmarks.create(
+            { parentId: current.id, title: dirName },
+            (newFolder) => {
+                if (chrome.runtime.lastError) {
+                    print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
+                } else {
+                    print(`Directory '${newFolder.title}' created.`);
+                    chrome.bookmarks.getSubTree(current.id, (results) => {
+                        if (results && results[0]) {
+                            current = results[0];
+                            path[path.length - 1] = current;
+                        }
+                        resolve();
+                    });
+                }
             }
-            print("");
-            done(); // <-- THE FIX
-          });
-      }
+        );
     });
   },
+  rm: (args, options) => {
+    return new Promise((resolve) => {
+        if (args.length === 0) {
+            print("Usage: rm [-r] [-f] <name>");
+            return resolve();
+        }
+        const targetName = args.join(" ");
+        const target = findChildByTitleFileOrDir(current.children || [], targetName);
 
-rmdir: (args) => {
-    if (args.length === 0) {
-      return "Usage: rmdir <directory_name>";
-    }
-    const dirName = args.join(" ");
-    const target = findChildByTitleFileOrDir(current.children || [], dirName);
+        if (!target) {
+            if (options.f) return resolve();
+            print(`rm: cannot remove '${targetName}': No such file or directory`);
+            return resolve();
+        }
 
-    if (!target) {
-      return `rmdir: failed to remove '${dirName}': No such directory`;
-    }
-    if (!target.children) {
-      return `rmdir: failed to remove '${dirName}': Not a directory`;
-    }
-    if (target.children.length > 0) {
-      return `rmdir: failed to remove '${dirName}': Directory not empty`;
-    }
+        const isDirectory = !!target.children;
+        const isRecursive = !!options.r;
 
-    awaiting();
-    chrome.bookmarks.remove(target.id, () => {
-      if (chrome.runtime.lastError) {
-        print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
-      } else {
-        print(`Removed directory '${dirName}'.`);
-        chrome.bookmarks.getSubTree(current.id, (results) => {
-            if (results && results[0]) {
-              current = results[0];
-              path[path.length - 1] = current; // <-- THE FIX
+        const refreshCurrentAndResolve = () => {
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) {
+                    current = results[0];
+                    path[path.length - 1] = current;
+                }
+                resolve();
+            });
+        };
+
+        if (isDirectory && isRecursive) {
+            chrome.bookmarks.removeTree(target.id, () => {
+                if (chrome.runtime.lastError) {
+                    print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
+                } else {
+                    print(`Recursively removed '${targetName}'.`);
+                }
+                refreshCurrentAndResolve();
+            });
+            return;
+        }
+
+        if (isDirectory && target.children.length > 0) {
+            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
+            return resolve();
+        }
+
+        chrome.bookmarks.remove(target.id, () => {
+            if (chrome.runtime.lastError) {
+                print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Removed '${targetName}'.`);
             }
-            print("");
-            done(); // <-- THE FIX
+            refreshCurrentAndResolve();
         });
-      }
+    });
+  },
+  rmdir: (args) => {
+    return new Promise((resolve) => {
+        if (args.length === 0) {
+            print("Usage: rmdir <directory_name>");
+            return resolve();
+        }
+        const dirName = args.join(" ");
+        const target = findChildByTitleFileOrDir(current.children || [], dirName);
+
+        if (!target) {
+            print(`rmdir: failed to remove '${dirName}': No such directory`);
+            return resolve();
+        }
+        if (!target.children) {
+            print(`rmdir: failed to remove '${dirName}': Not a directory`);
+            return resolve();
+        }
+        if (target.children.length > 0) {
+            print(`rmdir: failed to remove '${dirName}': Directory not empty`);
+            return resolve();
+        }
+
+        chrome.bookmarks.remove(target.id, () => {
+            if (chrome.runtime.lastError) {
+                print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Removed directory '${dirName}'.`);
+            }
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) {
+                    current = results[0];
+                    path[path.length - 1] = current;
+                }
+                resolve();
+            });
+        });
     });
   },
   // Theme 
@@ -889,127 +954,125 @@ rmdir: (args) => {
       applyUpdates();
     }
   },
-  history: () => {
+  history: (args, options, pipedInput) => {
     if (previousCommands.length === 0) {
-      return "No history yet.";
+      return ["No history yet."];
     }
-    previousCommands.forEach((cmd, index) => {
-      // Right-align index for better readability
-      const paddedIndex = String(index + 1).padStart(3, ' ');
-      print(`${paddedIndex}  ${cmd}`);
+    // Map history to an array of strings
+    return previousCommands.map((cmd, index) => {
+        const paddedIndex = String(index + 1).padStart(3, ' ');
+        return `${paddedIndex}  ${cmd}`;
     });
-    return "";
   },
 
-  // 在 script.js 中，替换旧的 touch 函数
-touch: (args) => {
-    if (args.length === 0) {
-      return "Usage: touch <filename>";
-    }
-    const filename = args.join(" ");
-    const existing = findChildByTitleFileOrDir(current.children || [], filename);
+  touch: (args) => {
+    return new Promise((resolve) => {
+        if (args.length === 0) {
+            print("Usage: touch <filename>");
+            return resolve();
+        }
+        const filename = args.join(" ");
+        const existing = findChildByTitleFileOrDir(current.children || [], filename);
 
-    if (existing) {
-      return;
-    }
+        if (existing) {
+            return resolve();
+        }
 
-    awaiting();
-    chrome.bookmarks.create({
-      parentId: current.id,
-      title: filename,
-      url: "about:blank#touched"
-    }, (newItem) => {
-      if (chrome.runtime.lastError) {
-        print(`Error: ${chrome.runtime.lastError.message}`, "error");
-        done();
-      } else {
-        chrome.bookmarks.getSubTree(current.id, (results) => {
-          if (results && results[0]) {
-            current = results[0];
-            path[path.length - 1] = current; // <-- THE FIX
-          }
-          done(); // <-- THE FIX
-        });
-      }
-    });
-},
-editlink: (args) => {
-    if (args.length < 2) {
-      return "Usage: editlink <bookmark_name> <new_url>";
-    }
-    // The first argument is the name, the rest is the URL
-    const bookmarkName = args.shift(); 
-    const newUrl = args.join(' ');
-
-    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
-    if (!target) {
-      return `editlink: '${bookmarkName}': No such file or bookmark.`;
-    }
-    if (target.children) {
-      return `editlink: '${bookmarkName}': Is a directory, cannot set a URL.`;
-    }
-
-    awaiting();
-    chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
-      if (chrome.runtime.lastError) {
-        print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
-      } else {
-        print(`Updated link for '${updatedNode.title}'.`);
-        print(`New URL: ${updatedNode.url}`, "success");
-      }
-      
-      // Refresh current directory to get the updated node data
-      chrome.bookmarks.getSubTree(current.id, (results) => {
-          if (results && results[0]) {
-              current = results[0];
-              path[path.length - 1] = current;
-          }
-          print("");
-          done();
-      });
-    });
-},
-
-// 在 script.js 中，替换旧的 mv 函数
-mv: (args) => {
-    if (args.length < 2) {
-      return "Usage: mv <source> <destination>";
-    }
-    const sourceName = args[0];
-    const destName = args[1];
-    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
-    if (!sourceNode) {
-      return `mv: cannot stat '${sourceName}': No such file or directory`;
-    }
-    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
-
-    awaiting();
-    const refreshAndDone = () => {
-        chrome.bookmarks.getSubTree(current.id, (results) => {
-            if (results && results[0]) {
-                current = results[0];
-                path[path.length - 1] = current; // <-- THE FIX
+        chrome.bookmarks.create({
+            parentId: current.id,
+            title: filename,
+            url: "about:blank#touched"
+        }, (newItem) => {
+            if (chrome.runtime.lastError) {
+                print(`Error: ${chrome.runtime.lastError.message}`, "error");
             }
-            done(); // <-- THE FIX
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) {
+                    current = results[0];
+                    path[path.length - 1] = current;
+                }
+                resolve();
+            });
         });
-    };
-    
-    if (destNode && destNode.children) {
-      chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
-        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-        refreshAndDone();
-      });
-    } else {
-      chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
-        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-        refreshAndDone();
-      });
-    }
-},
+    });
+  },
+  editlink: (args) => {
+    return new Promise((resolve) => {
+        if (args.length < 2) {
+            print("Usage: editlink <bookmark_name> <new_url>");
+            return resolve();
+        }
+        const bookmarkName = args.shift(); 
+        const newUrl = args.join(' ');
 
-// 在 script.js 中，替换旧的 cp 函数
-cp: async (args, options) => {
+        const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+        if (!target) {
+            print(`editlink: '${bookmarkName}': No such file or bookmark.`);
+            return resolve();
+        }
+        if (target.children) {
+            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`);
+            return resolve();
+        }
+
+        chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
+            if (chrome.runtime.lastError) {
+                print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Updated link for '${updatedNode.title}'.`);
+                print(`New URL: ${updatedNode.url}`, "success");
+            }
+            
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) {
+                    current = results[0];
+                    path[path.length - 1] = current;
+                }
+                resolve();
+            });
+        });
+    });
+  },
+  mv: (args) => {
+    return new Promise((resolve) => {
+        if (args.length < 2) {
+            print("Usage: mv <source> <destination>");
+            return resolve();
+        }
+        const sourceName = args[0];
+        const destName = args[1];
+        const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+        if (!sourceNode) {
+            print(`mv: cannot stat '${sourceName}': No such file or directory`);
+            return resolve();
+        }
+        const destNode = findChildByTitleFileOrDir(current.children || [], destName);
+
+        const refreshAndResolve = () => {
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) {
+                    current = results[0];
+                    path[path.length - 1] = current;
+                }
+                resolve();
+            });
+        };
+        
+        if (destNode && destNode.children) {
+            chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
+                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+                refreshAndResolve();
+            });
+        } else {
+            chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
+                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+                refreshAndResolve();
+            });
+        }
+    });
+  },
+  cp: async (args, options) => {
     if (args.length < 2) {
       return "Usage: cp [-r] <source> <destination>";
     }
@@ -1024,7 +1087,6 @@ cp: async (args, options) => {
     }
     const destNode = findChildByTitleFileOrDir(current.children || [], destName);
     
-    awaiting();
     try {
       if (destNode && destNode.children) {
         await copyNodeRecursively(sourceNode, destNode.id);
@@ -1035,31 +1097,29 @@ cp: async (args, options) => {
       const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
       if (results && results[0]) {
           current = results[0];
-          path[path.length - 1] = current; // <-- THE FIX
+          path[path.length - 1] = current;
       }
     } catch (e) {
       print(`Error copying: ${e.message}`, "error");
     }
-    done(); // <-- THE FIX (already well-placed in this async function)
-},
-
+  },
   find: (args, options) => {
-    if (args.length == 0) {
-      return "Usage: find -name <pattern>";
-    }
-    const namePattern = args.join(" ");
-    const regex = new RegExp(namePattern.replace(/\*/g, '.*'), 'i');
+    return new Promise(resolve => {
+        if (args.length == 0) {
+            print("Usage: find -name <pattern>");
+            return resolve();
+        }
+        const namePattern = args.join(" ");
+        const regex = new RegExp(namePattern.replace(/\*/g, '.*'), 'i');
 
-    print(`Searching for '${namePattern}'...`);
-    awaiting();
-    if (current.children) {
-        // Start the search on each child of the current directory
-        current.children.forEach(child => {
-            findRecursive(child, '.', regex);
-        });
-    }
-    done();
-    return ""; // Signal command completion
+        print(`Searching for '${namePattern}'...`);
+        if (current.children) {
+            current.children.forEach(child => {
+                findRecursive(child, '.', regex);
+            });
+        }
+        resolve();
+    });
   },
 
   alias: (args) => {
@@ -1137,7 +1197,122 @@ cp: async (args, options) => {
     terminal.style.display = "none";
     editorView.style.display = "flex";
     editorTitleInput.focus();
-},
+  },
+  export: (args) => {
+    if (args.length === 0) {
+        return "Usage: export VAR=value";
+    }
+    const assignment = args.join(' ');
+    const match = assignment.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) {
+        return "Invalid syntax. Use VAR=value format.";
+    }
+    const key = match[1];
+    const value = match[2];
+    environmentVars[key] = value;
+    // No output on success, like bash
+  },
+  env: (args, options, pipedInput) => {
+    const output = [];
+    for (const key in environmentVars) {
+        output.push(`${key}=${environmentVars[key]}`);
+    }
+    // Also add dynamic user variable
+    if (user) {
+        output.push(`USER=${user}`);
+    }
+    return output; // Return array for piping
+  },
+
+  tabs: (args, options, pipedInput) => {
+    const subCommand = args.shift() || 'ls';
+    return new Promise(resolve => {
+        switch (subCommand) {
+            case 'ls':
+                chrome.tabs.query({}, (tabs) => {
+                    const output = tabs.map(tab => `[${tab.id}]\t${tab.title}`);
+                    resolve(output);
+                });
+                break;
+            case 'close':
+                const closeId = parseInt(args[0], 10);
+                if (isNaN(closeId)) {
+                    resolve(["Usage: tabs close <id>"]);
+                    return;
+                }
+                chrome.tabs.remove(closeId, () => resolve([]));
+                break;
+            case 'switch':
+                const switchId = parseInt(args[0], 10);
+                if (isNaN(switchId)) {
+                    resolve(["Usage: tabs switch <id>"]);
+                    return;
+                }
+                chrome.tabs.update(switchId, { active: true }, () => resolve([]));
+                break;
+            default:
+                resolve([`Unknown subcommand '${subCommand}'. Use ls, close, switch.`]);
+        }
+    });
+  },
+  downloads: (args, options, pipedInput) => {
+    const subCommand = args.shift() || 'ls';
+    return new Promise(resolve => {
+        switch (subCommand) {
+            case 'ls':
+                chrome.downloads.search({ limit: 20, orderBy: ['-startTime'] }, (items) => {
+                    const output = items.map(item => `[${item.id}] ${item.filename} (${item.state})`);
+                    resolve(output);
+                });
+                break;
+            default:
+                resolve([`Unknown subcommand '${subCommand}'. Use ls.`]);
+        }
+    });
+  },
+  wget: (args) => {
+    if (args.length === 0) return "Usage: wget <url>";
+    const url = args[0];
+
+    awaiting();
+    print(`Initiating download for: ${url}`);
+    
+    chrome.downloads.download({ url: url }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+            print(`Download failed: ${chrome.runtime.lastError.message}`, "error");
+            done();
+            return;
+        }
+
+        const progressBarWidth = 40;
+        let progress = 0;
+        const progressBarDiv = document.createElement('div');
+        output.appendChild(progressBarDiv);
+
+        const interval = setInterval(() => {
+            progress = Math.min(progress + Math.random() * 5, 99);
+            const filledWidth = Math.round(progressBarWidth * (progress / 100));
+            const emptyWidth = progressBarWidth - filledWidth;
+            progressBarDiv.textContent = `[${'='.repeat(filledWidth)}>${' '.repeat(emptyWidth)}] ${Math.round(progress)}%`;
+        }, 200);
+
+        wgetJobs[downloadId] = { interval, div: progressBarDiv };
+    });
+    // This command is async and manages its own 'done()' call via the listener
+  },
+
+  grep: (args, options, pipedInput) => {
+      if (args.length === 0) {
+          return "Usage: grep <pattern>";
+      }
+      const pattern = new RegExp(args[0], 'i'); // Case-insensitive
+      if (!pipedInput || !Array.isArray(pipedInput)) {
+          return "grep: This command requires piped input.";
+      }
+      return pipedInput.filter(line => pattern.test(String(line)));
+  },
+
+
   help: () => {
     print("");
     print("--- Terminal Help ---", "highlight");
@@ -1330,47 +1505,44 @@ async function ping_func(url, options) {
   done();
 }
 
-
-function print(text, type = "info") {
-  const lineWidth = output.clientWidth;
-  const charWidth = CHARACTER_WIDTH;
-
-  if (charWidth === 0) {
-    const lineDiv = document.createElement('div');
-    lineDiv.className = 'output-line output-line-powershell';
-    lineDiv.setAttribute('data-raw-text', String(text));
-    lineDiv.textContent = String(text);
-    output.appendChild(lineDiv);
-    window.scrollTo(0, document.body.scrollHeight);
-    return;
-  }
-
-  const textStr = String(text);
-  const totalTextPixelWidth = textStr.length * charWidth;
-  let numSpaces = 0;
-
-  if (totalTextPixelWidth < lineWidth) {
-    numSpaces = Math.floor((lineWidth - totalTextPixelWidth) / charWidth);
-  } else {
-    const lastLineActualPixelWidth = totalTextPixelWidth % lineWidth;
-    if (lastLineActualPixelWidth === 0 && totalTextPixelWidth > 0) {
-      numSpaces = 0;
-    } else {
-      numSpaces = Math.floor((lineWidth - lastLineActualPixelWidth) / charWidth);
-    }
-  }
-
-  numSpaces = Math.max(0, numSpaces);
-  const filledText = " ".repeat(numSpaces);
+// ! VERY IMPORTANT FUNCTION 
+function print(text, type = "info", allowHtml = false) {
+  // 1. Record this print action to our history log
+  outputHistory.push({ text, type, allowHtml });
 
   const lineDiv = document.createElement('div');
   lineDiv.className = `output-line output-line-powershell output-${type}`;
-  lineDiv.setAttribute('data-raw-text', textStr);
-  lineDiv.textContent = textStr + filledText;
 
+  const contentSpan = document.createElement('span');
+  contentSpan.className = 'line-content';
+  
+  const content = String(text);
+  if (allowHtml) {
+    contentSpan.innerHTML = content;
+  } else {
+    contentSpan.innerHTML = escapeHtml(content);
+  }
+  lineDiv.appendChild(contentSpan);
   output.appendChild(lineDiv);
-  window.scrollTo(0, document.body.scrollHeight);
+
+  setTimeout(() => {
+    const paddingSpan = document.createElement('span');
+    paddingSpan.className = 'line-padding';
+
+    // ★★★ THE FIX: Use getVisualWidth to calculate padding correctly ★★★
+    const visualWidth = getVisualWidth(contentSpan.textContent || "");
+    const terminalWidthChars = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+    
+    let numSpaces = terminalWidthChars - visualWidth;
+    
+    paddingSpan.textContent = " ".repeat(Math.max(0, numSpaces));
+    lineDiv.appendChild(paddingSpan);
+
+    window.scrollTo(0, document.body.scrollHeight);
+  }, 0);
 }
+
+
 
 function printLine(text, type = "info", endLine = false) {
   const lineWidth = output.clientWidth;
@@ -1445,22 +1617,7 @@ function rewrapLine(lineDiv) {
     }
 }
 
-
-function processCommand(input) {
-  const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
-  print(`${full_path} ${displayInput}`); // Echo command
-
-  // --- ALIAS EXPANSION ---
-  const firstWord = input.split(' ')[0];
-  if (aliases[firstWord]) {
-      const aliasExpansion = aliases[firstWord];
-      const restOfInput = input.substring(firstWord.length).trim();
-      input = `${aliasExpansion} ${restOfInput}`.trim();
-      print(`> ${input}`, "hint"); // Show the expanded command
-  }
-  // --- END ALIAS EXPANSION ---
-
-
+async function proceedCommandCore(input) {
   const parsed = parseCommandLine(input);
   if (!parsed) {
       print("Invalid command syntax.", "error");
@@ -1489,7 +1646,9 @@ function processCommand(input) {
 
   if (action) {
     const result = action(args, options);
-    if (typeof result === "string") {
+    if (result && typeof result.then === 'function') {
+      await result;
+    } else if (typeof result === "string") {
         print(result);
     } else if (result === false) {
         // Command handles its own output or is async
@@ -1511,9 +1670,180 @@ function processCommand(input) {
       print(`Unknown command: '${command}' (try 'help')`, "error");
     }
   }
-  if (!commanding) { // If not an async command like ping
-    print(""); // Add a blank line for spacing after most command outputs
+  // if (!commanding) { // If not an async command like ping
+  //   print(""); // Add a blank line for spacing after most command outputs
+  // }
+}
+
+// wget download status 
+chrome.downloads.onChanged.addListener((delta) => {
+  if (wgetJobs[delta.id]) {
+    if (delta.state && delta.state.current !== 'in_progress') {
+      const { interval, div } = wgetJobs[delta.id];
+      clearInterval(interval);
+      const progressBarWidth = 40;
+      if (delta.state.current === 'complete') {
+        div.textContent = `[${'='.repeat(progressBarWidth + 1)}] 100% - Complete`;
+      } else {
+        div.textContent = `[${'x'.repeat(progressBarWidth + 1)}] - ${delta.state.current}`;
+      }
+      delete wgetJobs[delta.id];
+      done(); // Restore prompt
+    }
   }
+});
+
+// helper function for expandingVars
+function expandVariables(input) {
+  // Regex to find $VAR or ${VAR}
+  return input.replace(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([^}]+)\}/g, (match, var1, var2) => {
+    const varName = var1 || var2;
+    // We'll also add the USER variable dynamically
+    if (varName === 'USER') return user;
+    return environmentVars[varName] || ""; // Replace with value or empty string
+  });
+}
+
+async function executePipeline(pipelineStr) {
+    const pipedCommands = pipelineStr.split('|').map(c => c.trim());
+    let previousOutput = null;
+
+    for (let i = 0; i < pipedCommands.length; i++) {
+        const commandStr = pipedCommands[i];
+        if (!commandStr) continue;
+
+        const isLastInPipe = i === pipedCommands.length - 1;
+
+        // --- Variable & Alias Expansion ---
+        let expandedCommand = expandVariables(commandStr);
+        let finalCommand = expandedCommand;
+        const firstWord = expandedCommand.split(' ')[0];
+        if (aliases[firstWord]) {
+            const aliasExpansion = aliases[firstWord];
+            const restOfInput = expandedCommand.substring(firstWord.length).trim();
+            finalCommand = `${aliasExpansion} ${restOfInput}`.trim();
+            if (isLastInPipe) {
+                 print(`> ${finalCommand}`, "hint");
+            }
+        }
+        
+        // --- ★★★ BUG FIX 1: Re-add the special check for './' commands ★★★ ---
+        if (finalCommand.startsWith("./")) {
+            let name = finalCommand.substring(2).trim();
+            const target = findChildByTitleFileOrDir(current.children || [], name);
+            if (target && target.url && !target.children) {
+                if (target.url.startsWith("javascript:")) {
+                    print(`Executing JavaScript from bookmarks is disabled for security.`, "error");
+                } else {
+                    location.href = target.url;
+                }
+            } else if (target && target.children) {
+                print(`${name}: Is a directory. Use 'cd' to navigate.`, "info");
+            } else {
+                print(`${name}: No such file or bookmark.`, "error");
+            }
+            continue; // Skip the rest of the pipeline logic for this command
+        }
+        // --- End of Bug Fix 1 ---
+
+        const parsed = parseCommandLine(finalCommand);
+        if (!parsed) {
+            if (isLastInPipe) print("Invalid command syntax.", "error");
+            continue;
+        }
+
+        const { command, args, options } = parsed;
+        const action = commands[command];
+
+        if (action) {
+            const result = await Promise.resolve(action(args, options, previousOutput));
+            previousOutput = result;
+
+            if (isLastInPipe) {
+                const isLsCommand = (command === 'ls' || (aliases[command] && aliases[command].startsWith('ls')));
+                if (typeof result === "string") {
+                    print(result);
+                } else if (Array.isArray(result)) {
+                  const allowHtmlForResult = isLsCommand;
+                    result.forEach(line => print(line, 'info', allowHtmlForResult));
+                }
+            }
+        } else {
+             if (isLastInPipe) {
+                if (default_mode) {
+                    const defaultAction = commands[default_search_engine];
+                    if (defaultAction) {
+                        defaultAction([command, ...args], options);
+                    }
+                } else {
+                    print(`Unknown command: '${command}'`, "error");
+                }
+            }
+            previousOutput = null;
+        }
+    }
+}
+
+async function executeLine(line) {
+    const commandSegments = line.split(';').filter(cmd => cmd.trim() !== '');
+    
+    if (line.trim() === "") {
+        print(`${full_path} `);
+        print("");
+        return;
+    }
+    
+    print(`${full_path} ${line}`); // Echo the full line once
+
+    awaiting();
+    for (const segment of commandSegments) {
+        await executePipeline(segment);
+    }
+    if (!commanding) { // If no async command like wget is running
+        done();
+        print("");
+    }
+}
+
+async function processCommand(input) {
+  const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
+  print(`${full_path} ${displayInput}`);
+
+  if (input.startsWith(";")) {
+    print("-start-terminal: syntax error near unexpected token `;'", "warning");
+    done();
+    return;
+  }
+
+  // Treat every command as a list 
+  const commandList = input.split(";");
+
+  // Disable Inputting 
+  awaiting();
+
+  for (const singleCommand of commandList) {
+    const trimmedCommand = singleCommand.trim();
+    if (trimmedCommand) {
+      // --- Alias ---
+      let commandToExecute = trimmedCommand;
+      const firstWord = trimmedCommand.split(' ')[0];
+      if (aliases[firstWord]) {
+          const aliasExpansion = aliases[firstWord];
+          const restOfInput = trimmedCommand.substring(firstWord.length).trim();
+          commandToExecute = `${aliasExpansion} ${restOfInput}`.trim();
+          print(`> ${commandToExecute}`, "hint");
+      }
+      // --- 别名扩展结束 ---
+
+      await proceedCommandCore(commandToExecute); // 等待每个命令顺序执行
+    }
+  }
+
+  // 在所有命令都执行完毕后，恢复一次输入
+  if (!commanding) {
+    done();
+  }
+  print(""); // 在最后打印一个空行
 }
 
 function awaiting() {
@@ -1686,6 +2016,7 @@ async function loadSettings() {
 
 function clearOutput() {
   output.innerHTML = "";
+  outputHistory = [];
   // Welcome message can be re-added if desired, or keep it minimal
   // welcomeMsg();
   // No need to reset buffer/cursor here as it's for visual output
@@ -1709,7 +2040,7 @@ function clearSuggestions() {
 }
 
 // --- Keyboard Listeners ---
-document.body.addEventListener("keydown", e => {
+document.body.addEventListener("keydown", async e => {
 
   if (isEditing) {
     // Save: Ctrl+S or Cmd+S
@@ -2033,32 +2364,26 @@ document.body.addEventListener("keydown", e => {
       typingIO_cursor();
       updateInputDisplay();
     }
-  } else if (e.key === "Enter") {
-    clearSuggestions(); 
+  } else // in script.js, REPLACE the 'if (e.key === "Enter")' block in the keydown listener with this final version.
+
+if (e.key === "Enter") {
+    clearSuggestions();
     e.preventDefault();
-    if (promptSymbol.style.display === "none" && commanding) return;
+    if (commanding) return; // Don't process new commands if one is already running
 
     const commandToProcess = buffer.trim();
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
-         previousCommands.push(buffer);
-         if (previousCommands.length > 50) previousCommands.shift(); // Limit history size
-         saveCommandHistory(); // Save command history to storage
+        previousCommands.push(buffer);
+        if (previousCommands.length > 50) previousCommands.shift();
+        saveCommandHistory();
     }
-    previousCommandIndex = 0; // Reset history index
-
-    if (commandToProcess === "") {
-      print(`${full_path} ${buffer}`);
-      // print(""); // Blank line after empty command
-    } else {
-      processCommand(commandToProcess); // processCommand now adds its own blank line
-    }
+    previousCommandIndex = 0;
     buffer = "";
     cursorPosition = 0;
-    if (!commanding) {
-        updateInputDisplay(); // Update display unless an async command took over
-    }
+    updateInputDisplay();
 
-  } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+    executeLine(commandToProcess);
+} else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     e.preventDefault();
     typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
@@ -2263,12 +2588,65 @@ function updateLinesOnResize() {
   }
 }
 
+/**
+ * Calculates the visual width of a string, treating CJK characters as width 2.
+ * @param {string} text The string to measure.
+ * @returns {number} The visual width of the string.
+ */
+function getVisualWidth(text) {
+    let width = 0;
+    for (let i = 0; i < text.length; i++) {
+        const charCode = text.charCodeAt(i);
+        // A simple check for full-width characters.
+        // This covers CJK unified ideographs, full-width forms, etc.
+        if (charCode > 255) {
+            width += 2;
+        } else {
+            width += 1;
+        }
+    }
+    return width;
+}
 
 let resizeTimeout;
-window.addEventListener("resize", () => {
-  clearTimeout(resizeTimeout);
-  resizeTimeout = setTimeout(updateLinesOnResize, 150); // Debounce resize
-});
+// window.addEventListener("resize", () => {
+//   clearTimeout(resizeTimeout);
+//   resizeTimeout = setTimeout(updateLinesOnResize, 150); // Debounce resize
+// });
+/**
+/**
+ * A debounce function to prevent resize events from firing too frequently.
+ * @param {function} func The function to debounce.
+ * @param {number} delay The delay in milliseconds.
+ * @returns {function} The debounced function.
+ */
+function debounce(func, delay) {
+    let timeout;
+    return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), delay);
+    };
+}
+
+/**
+ * Redraws the padding on all existing lines to fit the new terminal width.
+ */
+function redrawAllLinesOnResize() {
+    updateCharacterWidth(); // Update our measurement of character width
+
+    const currentHistory = [...outputHistory]; // Make a copy of the history
+    output.innerHTML = ""; // Clear the screen
+    outputHistory = []; // Reset the log
+
+    // Replay the entire history, printing each line again with the new dimensions
+    currentHistory.forEach(logEntry => {
+        print(logEntry.text, logEntry.type, logEntry.allowHtml);
+    });
+}
+
+// Attach the new, intelligent redraw function to the window's resize event.
+window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
 window.onload = async () => {
   // No explicit body focus, let browser decide or user click.

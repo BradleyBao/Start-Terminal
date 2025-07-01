@@ -5,15 +5,34 @@ const typedText = document.getElementById("typedText"); // This will show text b
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
 const terminal = document.getElementById("terminal");
 const promptSymbol = document.getElementById("promptSymbol");
+const suggestionsContainer = document.getElementById("autocomplete-suggestions");
+const editorView = document.getElementById("editor-view");
+const editorTitleInput = document.getElementById("editor-title");
+const editorUrlInput = document.getElementById("editor-url"); 
+const editorStatus = document.getElementById("editor-status"); 
 const supported_search_engine = ["google", "bing", "baidu"];
+const backgroundContainer = document.getElementById("background-container");
+const bgUploadInput = document.getElementById("bg-upload-input");
 
-var control_cmd = false;
-var commanding = false;
+let control_cmd = false;
+let commanding = false;
+let input_mode = false;
+let user_input_content = "";
 let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
+
+
+let isEditing = false; 
+let editingBookmarkId = null; 
+
+let environmentVars = {};
+let wgetJobs = {};
+
 let default_mode = false;
 let default_search_engine = "google";
+
+let aliases = {};
 
 let user = ""
 
@@ -28,6 +47,10 @@ let full_path = null;
 //   get_fav(bookmarkTree);
 // });
 
+let promptTheme = "default"; // Default theme
+let promptOpacity = .15; // Default opacity for the prompt
+let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+
 function get_fav(bookmarks) {
   root = bookmarks[0];
   current = root;
@@ -39,7 +62,7 @@ function get_fav(bookmarks) {
 function update_user_path() {
   full_path = user;
   if (user !== "") {
-    full_path += " ";
+    full_path += ": ";
   }
   full_path += path.map(p => p.title || "~").join("/") || "/";
   full_path +=  " $";
@@ -258,27 +281,71 @@ function setCaretAtOffset(element, offset) {
 }
 
 
-function listChildren() {
-  if (!current.children) {
-    print("Not a directory");
+function listChildren(options) {
+  if (!current || !current.children) {
+    print("Error: current directory not available.", "error");
     return;
   }
 
+  if (current.children.length === 0) {
+    return;
+  }
+
+  if (options && options.l) {
+    const formatDate = (timestamp) => {
+      return new Date(timestamp).toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).replace(',', '');
+    };
+    current.children.forEach((child, index) => {
+    const typeChar = child.children ? "d" : "-"; // 'd' for directory, '-' for file
+    const date = child.dateAdded || child.dateGroupModified || Date.now();
+    const formattedDate = formatDate(date);
+    const isLastChild = (index === current.children.length - 1);
+    const className = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
+    if (user !== "") {
+      print(`${typeChar}rwxr-xr-x ${user} ${user} ${formattedDate} ${child.title}`, className, isLastChild);
+    } else {
+      print(`${typeChar}rwxr-xr-x root root ${formattedDate} ${child.title}`, className, isLastChild);
+    }
+
+    return;
+  });
+  } else {
+    // Default listing
   current.children.forEach((child, index) => {
     const isLastChild = (index === current.children.length - 1);
-
-    if (child.children) { // 这是一个文件夹
-      printLine(`${child.title}`, "folder", isLastChild);
-    } else { // 这是一个书签（文件）
-      // 检查是否为 "executable" (javascript: URL)
-      if (child.url && child.url.startsWith("javascript:")) {
-        printLine(`${child.title}`, "exec", isLastChild);
-      } else {
-        printLine(`${child.title}`, "file", isLastChild);
-      }
-    }
+    const className = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
+    // If the name is too long and no enough space, end this line with spaces and continued with a new line
+    printLine(child.title, className, isLastChild);
   });
+  };
+
+  
+  
 }
+
+// In script.js, place this before the 'const commands = { ... };' block
+
+const manPages = {
+  "ls": "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.",
+  "cd": "NAME\n  cd - change the current directory\n\nSYNOPSIS\n  cd <directory>\n  cd ..\n\nDESCRIPTION\n  Change the current bookmark folder to <directory>. 'cd ..' moves to the parent folder.",
+  "mv": "NAME\n  mv - move (rename) files\n\nSYNOPSIS\n  mv <source> <destination>\n\nDESCRIPTION\n  Renames <source> to <destination>, or moves <source> into <destination> if <destination> is an existing folder.",
+  "cp": "NAME\n  cp - copy files and directories\n\nSYNOPSIS\n  cp [-r] <source> <destination>\n\nDESCRIPTION\n  Copies <source> to <destination>.\n\n  -r\tcopy directories recursively.",
+  "find": "NAME\n  find - search for files in a directory hierarchy\n\nSYNOPSIS\n  find [path] -name <pattern>\n\nDESCRIPTION\n  Searches for bookmarks/folders matching the <pattern> within the given [path] or current directory.\n  The pattern can include a wildcard '*' (e.g., 'find -name \"*search*\").",
+  "history": "NAME\n  history - display command history\n\nSYNOPSIS\n  history\n\nDESCRIPTION\n  Displays the list of previously executed commands.",
+  "alias": "NAME\n  alias - create a shortcut for a command\n\nSYNOPSIS\n  alias\n  alias <name>='<command>'\n\nDESCRIPTION\n  'alias' with no arguments prints the list of aliases.\n  'alias name='command'' defines an alias 'name' for 'command'. Quotes are important for commands with spaces.",
+  "touch": "NAME\n  touch - create a new, empty bookmark\n\nSYNOPSIS\n  touch <filename>\n\nDESCRIPTION\n  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.",
+  "man": "NAME\n  man - format and display the on-line manual pages\n\nSYNOPSIS\n  man <command>\n\nDESCRIPTION\n  Displays the manual page for a given command.",
+  "clear": "NAME\n  clear, cls - clear the terminal screen\n\nSYNOPSIS\n  clear\n  cls\n\nDESCRIPTION\n  Clears all previous output from the terminal screen.",
+  "editlink": "NAME\n  editlink - change the URL of a bookmark\n\nSYNOPSIS\n  editlink <bookmark_name> <new_url>\n\nDESCRIPTION\n  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.",
+
+};
 
 const previousCommands = [];
 let previousCommandIndex = 0;
@@ -523,7 +590,7 @@ const commands = {
     clearOutput();
   },
   ls: (args, options) => {
-    listChildren();
+    listChildren(options);
   },
   cd: (args, options) => {
     if (!args) {
@@ -534,20 +601,18 @@ const commands = {
   pwd: (args, options) => {
     return path.map(p => p.title || "/home").join("/") || "/";
   },
-  gh: () => location.href = "https://github.com",
   mkdir: (args) => {
     if (args.length === 0) {
       return "Usage: mkdir <directory_name>";
     }
-    const dirName = args.join(" "); // Folder name space allowed
+    const dirName = args.join(" ");
 
-    // Check already exists
     const existing = findChildByTitle(current.children || [], dirName);
     if (existing) {
       return `mkdir: cannot create directory '${dirName}': File exists`;
     }
 
-    awaiting(); // waiting for command to finish
+    awaiting();
     chrome.bookmarks.create(
       {
         parentId: current.id,
@@ -558,72 +623,59 @@ const commands = {
           print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
         } else {
           print(`Directory '${newFolder.title}' created.`);
-          // Refresh current children
+          // 刷新当前节点的子节点列表以保持同步
           chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX: Update the node in the path array
             }
+            print("");
+            done(); // <-- THE FIX: Call done() inside the async callback
           });
         }
-        print("");
-        done();
       }
     );
   },
-  rm: (args, options) => {
+  // 在 script.js 中，替换旧的 rm 函数
+rm: (args, options) => {
     if (args.length === 0) {
       return "Usage: rm [-r] [-f] <name>";
     }
-    const targetName = args.join(" "); // 支持带空格的名称
-
+    const targetName = args.join(" ");
     const target = findChildByTitleFileOrDir(current.children || [], targetName);
 
-    // 情况1: 目标不存在
     if (!target) {
-      if (options.f) return; // -f (force) 选项：如果不存在，则静默处理，不做任何事
-      print(`rm: cannot remove '${targetName}': No such file or directory`, "error");
-      return;
+      if (options.f) return;
+      return `rm: cannot remove '${targetName}': No such file or directory`;
     }
 
     const isDirectory = !!target.children;
     const isRecursive = !!options.r;
 
-    console.log(isDirectory, isRecursive);
-
-    // 情况2: 使用 -r (递归删除)
     if (isRecursive) {
-      // rm -r 可以删除文件或目录
       awaiting();
-      // chrome.bookmarks.removeTree 会删除一个文件夹及其所有子内容
-      // 对单个书签使用它，效果和 chrome.bookmarks.remove 一样
       chrome.bookmarks.removeTree(target.id, () => {
         if (chrome.runtime.lastError) {
           print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
         } else {
           print(`Recursively removed '${targetName}'.`);
-          // 刷新当前节点的子节点列表以保持同步
           chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
           });
         }
-        print("");
-        done();
       });
-      return; // 异步处理，提前返回
+      return;
     }
 
-    // 情况3: 不使用 -r
-    if (isDirectory) {
-      // 如果是目录但没有-r选项，则必须为空才能删除
-      if (target.children.length > 0) {
-        return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
-      }
-      // 如果是空目录，则可以删除
+    if (isDirectory && target.children.length > 0) {
+      return `rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`;
     }
 
-    // 执行删除 (单个书签 或 空目录)
     awaiting();
     chrome.bookmarks.remove(target.id, () => {
       if (chrome.runtime.lastError) {
@@ -633,26 +685,27 @@ const commands = {
         chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
           });
       }
-      print("");
-      done();
     });
   },
-  rmdir: (args) => {
+
+rmdir: (args) => {
     if (args.length === 0) {
       return "Usage: rmdir <directory_name>";
     }
     const dirName = args.join(" ");
-    
     const target = findChildByTitleFileOrDir(current.children || [], dirName);
 
     if (!target) {
       return `rmdir: failed to remove '${dirName}': No such directory`;
     }
-    if (!target.children) { // 这是一个书签文件
-        return `rmdir: failed to remove '${dirName}': Not a directory`;
+    if (!target.children) {
+      return `rmdir: failed to remove '${dirName}': Not a directory`;
     }
     if (target.children.length > 0) {
       return `rmdir: failed to remove '${dirName}': Directory not empty`;
@@ -664,17 +717,116 @@ const commands = {
         print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
       } else {
         print(`Removed directory '${dirName}'.`);
-        // 刷新当前节点的子节点列表
         chrome.bookmarks.getSubTree(current.id, (results) => {
             if (results && results[0]) {
               current = results[0];
+              path[path.length - 1] = current; // <-- THE FIX
             }
+            print("");
+            done(); // <-- THE FIX
         });
       }
-      print("");
-      done();
     });
   },
+  // Theme 
+  theme: (args, options) => {
+    const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+    const themeName = args[0];
+    if (!themeName) {
+        return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+    }
+    if (supportedThemes.includes(themeName)) {
+        applyTheme(themeName);
+        chrome.storage.sync.set({ theme: themeName }); // 保存新设置
+        return `Theme set to ${themeName}.`;
+    } else {
+        return `Error: Theme '${themeName}' not supported.`;
+    }
+  },
+
+  uploadbg: () => {
+      bgUploadInput.click(); // Programmatically click the hidden file input
+      print("Opening file picker. Please select an image to upload as background.", "info");
+      awaiting();
+      // return "File picker opened. Please select an image.";
+  },
+
+  setbgAPI: (args) => {
+    const arg = args[0];
+    // Check if it is the link 
+    if (arg && (arg.startsWith("http://") || arg.startsWith("https://"))) {
+        promptBgRandomAPI = arg;
+        chrome.storage.sync.set({ imgAPI: promptBgRandomAPI });
+        print(`Background image API set to ${arg}.`, "success");
+        return;
+    }
+  },
+  tree: (args, options) => {
+    print(current.title || "~");
+    if (current.children && current.children.length > 0) {
+      current.children.forEach((child, index) => {
+        const isLast = index === current.children.length - 1;
+        displayTree(child, '', isLast);
+      });
+    }
+    return ""; // Return empty string for a clean prompt return
+  },
+  cat: (args, options) => {
+    if (args.length === 0) {
+      return "Usage: cat <bookmark_name>";
+    }
+    const targetName = args.join(" ");
+    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+
+    if (!target) {
+      return `cat: ${targetName}: No such file or directory`;
+    }
+
+    if (target.children) { // It's a directory
+      return `cat: ${targetName}: Is a directory`;
+    }
+
+    // It's a bookmark, print its details
+    print("--- Bookmark Details ---", "highlight");
+    print(`Title:    ${target.title}`);
+    print(`URL:      ${target.url}`);
+    if (target.dateAdded) {
+       print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
+    }
+    print("----------------------", "highlight");
+    return "";
+  },
+
+  setbg: (args) => {
+        const arg = args[0];
+        if (arg === 'clear') {
+            chrome.storage.local.remove('customBackground', () => {
+                // 回到默认背景
+                applyBackground(null, promptOpacity);
+                print("Custom background cleared. Reverted to default.", "success");
+            });
+            return;
+        }
+
+        // 检查是否是设置透明度
+        const opacityValue = parseFloat(arg);
+        if (!isNaN(opacityValue) && opacityValue >= 0 && opacityValue <= 1) {
+            promptOpacity = opacityValue;
+            applyBackground(backgroundContainer.style.backgroundImage.slice(5, -2), opacityValue); // Re-apply current bg with new opacity
+            chrome.storage.sync.set({ background_opacity: promptOpacity });
+            return `Background opacity set to ${opacityValue}.`;
+        }
+        
+        // 应用已上传的背景
+        chrome.storage.local.get('customBackground', (data) => {
+            if (data.customBackground) {
+                applyBackground(data.customBackground, promptOpacity);
+                print("Custom background applied.", "success");
+            } else {
+                print("No background image uploaded. Use 'uploadbg' first.", "warning");
+            }
+        });
+    },
 
   default: (args, options) => {
     // Change the default search engine
@@ -714,6 +866,281 @@ const commands = {
   mslogout: () => {
     logoutWithMicrosoft();
   },
+  apt: (args) => {
+    if (args.length === 0) {
+      return;
+    }
+    let arg = args[0];
+    if (arg == "update") {
+      awaiting();
+      checkForUpdates();
+    } else if (arg == "upgrade") {
+      awaiting();
+      applyUpdates();
+    }
+  },
+  "apt-get": (args) => {
+    if (args.length === 0) {
+      return;
+    }
+    let arg = args[0];
+    if (arg == "update") {
+      awaiting();
+      checkForUpdates();
+    } else if (arg == "upgrade") {
+      awaiting();
+      applyUpdates();
+    }
+  },
+  history: () => {
+    if (previousCommands.length === 0) {
+      return "No history yet.";
+    }
+    previousCommands.forEach((cmd, index) => {
+      // Right-align index for better readability
+      const paddedIndex = String(index + 1).padStart(3, ' ');
+      print(`${paddedIndex}  ${cmd}`);
+    });
+    return "";
+  },
+
+  // 在 script.js 中，替换旧的 touch 函数
+touch: (args) => {
+    if (args.length === 0) {
+      return "Usage: touch <filename>";
+    }
+    const filename = args.join(" ");
+    const existing = findChildByTitleFileOrDir(current.children || [], filename);
+
+    if (existing) {
+      return;
+    }
+
+    awaiting();
+    chrome.bookmarks.create({
+      parentId: current.id,
+      title: filename,
+      url: "about:blank#touched"
+    }, (newItem) => {
+      if (chrome.runtime.lastError) {
+        print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        done();
+      } else {
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+          if (results && results[0]) {
+            current = results[0];
+            path[path.length - 1] = current; // <-- THE FIX
+          }
+          done(); // <-- THE FIX
+        });
+      }
+    });
+},
+editlink: (args) => {
+    if (args.length < 2) {
+      return "Usage: editlink <bookmark_name> <new_url>";
+    }
+    // The first argument is the name, the rest is the URL
+    const bookmarkName = args.shift(); 
+    const newUrl = args.join(' ');
+
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) {
+      return `editlink: '${bookmarkName}': No such file or bookmark.`;
+    }
+    if (target.children) {
+      return `editlink: '${bookmarkName}': Is a directory, cannot set a URL.`;
+    }
+
+    awaiting();
+    chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
+      if (chrome.runtime.lastError) {
+        print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
+      } else {
+        print(`Updated link for '${updatedNode.title}'.`);
+        print(`New URL: ${updatedNode.url}`, "success");
+      }
+      
+      // Refresh current directory to get the updated node data
+      chrome.bookmarks.getSubTree(current.id, (results) => {
+          if (results && results[0]) {
+              current = results[0];
+              path[path.length - 1] = current;
+          }
+          print("");
+          done();
+      });
+    });
+},
+
+// 在 script.js 中，替换旧的 mv 函数
+mv: (args) => {
+    if (args.length < 2) {
+      return "Usage: mv <source> <destination>";
+    }
+    const sourceName = args[0];
+    const destName = args[1];
+    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+    if (!sourceNode) {
+      return `mv: cannot stat '${sourceName}': No such file or directory`;
+    }
+    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
+
+    awaiting();
+    const refreshAndDone = () => {
+        chrome.bookmarks.getSubTree(current.id, (results) => {
+            if (results && results[0]) {
+                current = results[0];
+                path[path.length - 1] = current; // <-- THE FIX
+            }
+            done(); // <-- THE FIX
+        });
+    };
+    
+    if (destNode && destNode.children) {
+      chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
+        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        refreshAndDone();
+      });
+    } else {
+      chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
+        if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
+        refreshAndDone();
+      });
+    }
+},
+
+// 在 script.js 中，替换旧的 cp 函数
+cp: async (args, options) => {
+    if (args.length < 2) {
+      return "Usage: cp [-r] <source> <destination>";
+    }
+    const sourceName = args[0];
+    const destName = args[1];
+    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+    if (!sourceNode) {
+      return `cp: cannot stat '${sourceName}': No such file or directory`;
+    }
+    if (sourceNode.children && !options.r) {
+      return `cp: -r not specified; omitting directory '${sourceName}'`;
+    }
+    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
+    
+    awaiting();
+    try {
+      if (destNode && destNode.children) {
+        await copyNodeRecursively(sourceNode, destNode.id);
+      } else {
+        await copyNodeRecursively(sourceNode, current.id, destName);
+      }
+      
+      const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
+      if (results && results[0]) {
+          current = results[0];
+          path[path.length - 1] = current; // <-- THE FIX
+      }
+    } catch (e) {
+      print(`Error copying: ${e.message}`, "error");
+    }
+    done(); // <-- THE FIX (already well-placed in this async function)
+},
+
+  find: (args, options) => {
+    if (args.length == 0) {
+      return "Usage: find -name <pattern>";
+    }
+    const namePattern = args.join(" ");
+    const regex = new RegExp(namePattern.replace(/\*/g, '.*'), 'i');
+
+    print(`Searching for '${namePattern}'...`);
+    awaiting();
+    if (current.children) {
+        // Start the search on each child of the current directory
+        current.children.forEach(child => {
+            findRecursive(child, '.', regex);
+        });
+    }
+    done();
+    return ""; // Signal command completion
+  },
+
+  alias: (args) => {
+      if (args.length === 0) {
+          if (Object.keys(aliases).length === 0) {
+              return "No aliases defined.";
+          }
+          print("Current aliases:", "highlight");
+          for (const name in aliases) {
+              print(`  alias ${name}='${aliases[name]}'`);
+          }
+          return;
+      }
+
+      const aliasDef = args.join(' ');
+      const match = aliasDef.match(/^([^=]+)='(.+)'$/);
+
+      if (!match) {
+          return "Usage: alias name='command'";
+      }
+
+      const name = match[1];
+      const command = match[2];
+      aliases[name] = command;
+      chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      return `Alias '${name}' set.`;
+  },
+  
+  man: (args, options) => {
+      if (args.length === 0) {
+          return "What manual page do you want?";
+      }
+      const page = args[0];
+      const content = manPages[page];
+
+      if (!content) {
+          return `No manual entry for ${page}`;
+      }
+
+      // Print with pre-wrap to respect newlines in the man page content
+      const lines = content.split('\n');
+      lines.forEach(line => {
+        // Simple formatting for headings (uppercase)
+        if (line === line.toUpperCase() && line.length > 2) {
+             print(line, "highlight");
+        } else {
+             print(line);
+        }
+      });
+  },
+  nano: (args) => {
+    if (args.length === 0) {
+      return "Usage: nano <bookmark_name>";
+    }
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) {
+      return `nano: '${bookmarkName}': No such file or bookmark.`;
+    }
+    if (target.children) {
+      return `nano: '${bookmarkName}': Is a directory.`;
+    }
+
+    // Enter editing mode
+    isEditing = true;
+    editingBookmarkId = target.id;
+
+    // Populate the editor fields
+    editorTitleInput.value = target.title;
+    editorUrlInput.value = target.url;
+    editorStatus.textContent = `Editing: ${target.title}`;
+
+    // Switch views
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+    editorTitleInput.focus();
+},
   help: () => {
     print("");
     print("--- Terminal Help ---", "highlight");
@@ -727,46 +1154,52 @@ const commands = {
     print("  bilibili <query> [-b] - Search with Bilibili.");
     print("  spotify <query> [-b]  - Search with Spotify.");
     print("");
-
+    
     print("Navigation & Bookmarks", "highlight");
-    print("  goto <url> [-b]       - Navigate to a specific URL.");
-    print("  gh                    - Navigate to GitHub.");
-    print("  ls                    - List bookmarks and folders in current directory.");
+    print("  ls [-l]               - List bookmarks in current directory.");
     print("  cd <folder>           - Change directory to a bookmark folder.");
     print("  cd ..                 - Go to parent directory.");
-    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("  pwd                   - Show current bookmark path.");
-    print("  mkdir <folder>   - Create a new bookmark folder.");
-    print("  rm [-r] [-f] <folder / file>   - Remove a bookmark or folder.");
-    print("  rmdir <folder>   - Remove an empty bookmark folder.");
+    print("  goto <url> [-b]       - Navigate to a specific URL.");
+    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
     print("");
 
-    print("Account Management", "highlight");
+    print("File & Directory Operations", "highlight");
+    print("  mkdir <folder>        - Create a new bookmark folder.");
+    print("  touch <file>          - Create a new, empty bookmark.");
+    print("  mv <src> <dest>       - Move or rename a bookmark/folder.");
+    print("  cp [-r] <src> <dest>  - Copy a bookmark or folder.");
+    print("  rm [-r] <name>        - Remove a bookmark or folder.");
+    print("  rmdir <folder>        - Remove an empty bookmark folder.");
+    print("  find [-name <pat>]    - Find bookmarks/folders by name.");
+    print("  nano <file>           - Edit a bookmark.");
+    print("  editlink <file>       - Update a bookmark's url.");
+
+    print("");
+
+    print("Account & System", "highlight");
     print("  mslogin               - Log in with a Microsoft account.");
     print("  mslogout              - Log out from Microsoft account.");
-    print("");
-
-    print("Utility Commands", "highlight");
-    print("  ping <host> [-n <count>] [-t] - Ping a host.");
     print("  date                  - Show current date and time.");
     print("  clear (or cls)        - Clear the terminal screen.");
+    print("  ping <host>           - Ping a host.");
     print("  locale                - Show browser language settings.");
     print("");
-
-    print("Settings & Features", "highlight");
-    print("  default <engine|on|off> - Set default search engine or toggle default mode.");
-    print("  * All settings, command history, output history, and login status are saved automatically.");
+    
+    print("Customization & History", "highlight");
+    print("  theme <name>          - Change terminal theme.");
+    print("  uploadbg / setbg      - Manage custom background.");
+    print("  history               - Show command history.");
+    print("  alias [name='cmd']    - Create or list command aliases.");
+    print("  man <command>         - Show the manual page for a command.");
     print("");
 
-    print("Command Options", "highlight");
-    print("  -b                    - Open search results or URL in a new background tab.");
-    print("  -n <count>            - (ping) Number of pings to send.");
-    print("  -t                    - (ping) Ping continuously until interrupted (Ctrl+C).");
-    print("");
-    return " "; // 返回一个空格以打印一个空行
+    print("For more details on a command, type: man <command_name>", "hint");
+    return ""; 
   },
 };
 
+// Alias 
 commands.yt = commands.youtube;
 
 function parseCommandLine(input) {
@@ -809,6 +1242,23 @@ function logoutWithMicrosoft() {
       done();
     });
   }
+
+// Add this helper function somewhere in your script.
+function displayTree(node, prefix = '', isLast = true) {
+  const nodeName = node.title || (node.url ? 'Untitled Bookmark' : 'Unknown');
+  const connector = isLast ? '└── ' : '├── ';
+  const className = node.children ? 'folder' : (node.url && node.url.startsWith("javascript:") ? 'exec' : 'file');
+  print(`${prefix}${connector}${nodeName}`, className);
+
+  if (node.children && node.children.length > 0) {
+    const newPrefix = prefix + (isLast ? '    ' : '│   ');
+    node.children.forEach((child, index) => {
+      const last = index === node.children.length - 1;
+      displayTree(child, newPrefix, last);
+    });
+  }
+};
+
 
 async function ping_func(url, options) {
   print("");
@@ -998,11 +1448,7 @@ function rewrapLine(lineDiv) {
     }
 }
 
-
-function processCommand(input) {
-  const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
-  print(`${full_path} ${displayInput}`); // Echo command
-
+function proceedCommandCore(input) {
   const parsed = parseCommandLine(input);
   if (!parsed) {
       print("Invalid command syntax.", "error");
@@ -1058,10 +1504,43 @@ function processCommand(input) {
   }
 }
 
+function processCommand(input) {
+  if (input.startsWith(";")) {
+    print("-start-terminal: syntax error near unexpected token `;'", "warning");
+    return;
+  }
+  // Multi-Commands
+  if (input.includes(";")) {
+    const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
+    print(`${full_path} ${displayInput}`); // Echo command
+    const commands = input.split(";");
+    for (const command of commands) {
+      proceedCommandCore(command);
+    }
+    return;
+  }
+  const displayInput = input.length > 200 ? input.substring(0, 200) + "..." : input;
+  print(`${full_path} ${displayInput}`); // Echo command
+
+  // --- ALIAS EXPANSION ---
+  const firstWord = input.split(' ')[0];
+  if (aliases[firstWord]) {
+      const aliasExpansion = aliases[firstWord];
+      const restOfInput = input.substring(firstWord.length).trim();
+      input = `${aliasExpansion} ${restOfInput}`.trim();
+      print(`> ${input}`, "hint"); // Show the expanded command
+  }
+  // --- END ALIAS EXPANSION ---
+
+  proceedCommandCore(input);
+  
+}
+
 function awaiting() {
   typedText.innerHTML = "";
   // blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
+  blockCursor.classList.add('no-blink');  // Disable blinking while awaiting command completion
 }
 
 function done() {
@@ -1074,6 +1553,7 @@ function done() {
     typedText.focus();
     setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
   }
+  blockCursor.classList.remove('no-blink'); // Re-enable blinking
 }
 
 // SETTINGS 
@@ -1145,7 +1625,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -1171,6 +1651,11 @@ async function loadSettings() {
       path = tempPath;
     }
   }
+
+  if (data.aliases) {
+    aliases = data.aliases;
+  }
+    
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
     default_search_engine = data.settings.default_search_engine ?? "google";
@@ -1193,7 +1678,31 @@ async function loadSettings() {
       print(`Welcome back, ${user_info}`, "success");
     }
   }
+
+  const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  
+  if (data.theme) {
+    promptTheme = data.theme;
+  }
+  console.log(data.imgAPI);
+  if (data.imgAPI) {
+    promptBgRandomAPI = data.imgAPI;
+    console.log("Background image API set to:", promptBgRandomAPI);
+  }
+  if (localData.customBackground) {
+    // promptBg = localData.customBackground;
+    promptOpacity = data.background_opacity;
+    applyTheme(data.theme);
+    applyBackground(localData.customBackground, data.background_opacity);
+  } else {
+    promptOpacity = data.background_opacity;
+    applyTheme(promptTheme);
+    applyBackground(null, promptOpacity); // Apply default background
+  }
+
+  bgUploadInput.addEventListener('change', handleFileSelect);
 }
+
 
 function clearOutput() {
   output.innerHTML = "";
@@ -1204,10 +1713,98 @@ function clearOutput() {
   done(); // Redraw prompt and input display
 }
 
+function typingIO_cursor() {
+  blockCursor.classList.add('no-blink');
+  // after 2 seconds, re-enable blinking
+  setTimeout(() => {
+    blockCursor.classList.remove('no-blink');
+  }, 100);
+}
+
+// in script.js, can be placed near other helper functions
+
+function clearSuggestions() {
+  suggestionsContainer.innerHTML = "";
+  suggestionsContainer.style.display = "none";
+}
 
 // --- Keyboard Listeners ---
 document.body.addEventListener("keydown", e => {
-  if (e.key === "Control" || e.key === "Meta") {
+
+  if (isEditing) {
+    // Save: Ctrl+S or Cmd+S
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      const newTitle = editorTitleInput.value;
+      const newUrl = editorUrlInput.value;
+
+      editorStatus.textContent = "Saving...";
+      chrome.bookmarks.update(editingBookmarkId, { title: newTitle, url: newUrl }, (updatedNode) => {
+        if (chrome.runtime.lastError) {
+          editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+        } else {
+          editorStatus.textContent = `Saved: ${updatedNode.title}`;
+          // Refresh current directory silently in the background
+          chrome.bookmarks.getSubTree(current.id, (results) => {
+              if (results && results[0]) {
+                current = results[0];
+                path[path.length - 1] = current;
+              }
+          });
+        }
+      });
+    }
+
+    // Exit: Ctrl+X
+    if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+      e.preventDefault();
+      // Exit editing mode
+      isEditing = false;
+      editingBookmarkId = null;
+
+      // Switch views back
+      editorView.style.display = "none";
+      terminal.style.display = "block";
+      done();
+    }
+    return; // Stop further processing in editing mode
+  }
+
+
+  // IO operations
+
+  // Stop cusor blinking when typing
+
+  // if user input mode 
+  if (input_mode) {
+    if (e.key === "Backspace") {
+    e.preventDefault();
+    if (cursorPosition > 0) {
+      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
+      // Basic backspace, could be enhanced for ^H like behavior if needed
+      buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
+      cursorPosition--;
+      typingIO_cursor();
+      updateInputDisplay();
+    }
+  } else if (e.key === "Enter") {
+    clearSuggestions(); 
+    e.preventDefault();
+    user_input_content = buffer;
+
+  } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+    clearSuggestions(); 
+    e.preventDefault();
+    typingIO_cursor();
+    buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
+    cursorPosition++;
+    updateInputDisplay();
+  }
+    return 
+  }
+  
+
+  if (e.key === "Control") {
     control_cmd = true;
     return;
   }
@@ -1254,6 +1851,7 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "ArrowLeft") {
+    clearSuggestions(); 
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
@@ -1262,6 +1860,7 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   if (e.key === "ArrowRight") {
+    clearSuggestions(); 
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
@@ -1314,12 +1913,16 @@ document.body.addEventListener("keydown", e => {
     return;
   }
   
-  // --- Tab Autocompletion ---
-  // 替换你 script.js 文件中 document.body.addEventListener("keydown", e => { ... });
-// 内部的 if (e.key === "Tab") { ... } 代码块
-
-if (e.key === "Tab") {
+  if (e.key === "Tab") {
     e.preventDefault();
+    clearSuggestions();
+
+    // --- FIX: Define command categories for smarter filtering ---
+    const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
+    // For file-only commands, we add a special "./" type for executable bookmarks
+    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./"];
+    // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
+
     const relevantInput = buffer.substring(0, cursorPosition);
     const pre_parts = relevantInput.trimStart().split(/\s+/);
     let commandName = pre_parts[0] || "";
@@ -1330,10 +1933,16 @@ if (e.key === "Tab") {
     let effectiveCommandType = "";
     let startOfBaseArgumentStringInRelevantInput = 0;
 
+    const allCompletableCommands = [
+        ...DIR_ONLY_COMMANDS, 
+        ...FILE_ONLY_COMMANDS, 
+        "ls", "rm", "mv", "cp", "touch" // Manually add universal commands
+    ];
+
     if (commandName.startsWith("./")) {
-        effectiveCommandType = "./";
+        effectiveCommandType = "./"; // Use the special type we defined
         startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
-    } else if (["cd", "ls", "rm", "rmdir"].includes(commandName)) {
+    } else if (allCompletableCommands.includes(commandName)) {
         effectiveCommandType = commandName;
         startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
     } else {
@@ -1362,23 +1971,27 @@ if (e.key === "Tab") {
         .filter(child => {
             const title = child.title || "";
             if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-            if (effectiveCommandType === "cd" || effectiveCommandType === "rmdir") {
-                return !!child.children;
+
+            // --- FIX: New, smarter filtering logic based on command type ---
+            const isDirectory = !!child.children;
+
+            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) {
+                return isDirectory; // Must be a directory
             }
+            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) {
+                return !isDirectory; // Must be a file
+            }
+
+            // Default case for commands like ls, rm, mv, cp: show everything
             return true;
         })
         .map(child => child.title)
         .sort();
-
+    
+    // The rest of the logic for displaying matches remains the same...
     if (matches.length === 1) {
         const match = matches[0];
-        const matchedNode = currentContextChildren.find(c => c.title === match);
-        
-        let completion = match;
-        // --- 变化点 1: 将 "/" 改为 " " ---
-        if (matchedNode && matchedNode.children) {
-            completion += " "; // 如果是目录，补全后添加空格以便输入下一个参数
-        }
+        const completion = match + " ";
 
         const replaceFrom = startOfBaseArgumentStringInRelevantInput;
         const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
@@ -1403,17 +2016,17 @@ if (e.key === "Tab") {
             cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
             updateInputDisplay();
         }
-
-        print(full_path + " " + buffer);
+        
         let outputLineContent = "";
         matches.forEach(m => {
-            // --- 变化点 2: 不再显示 "/" ---
-            outputLineContent += m + "   "; // 只显示名称，用多个空格分隔
+             const matchedNode = currentContextChildren.find(c => c.title === m);
+             outputLineContent += (matchedNode && matchedNode.children ? m + "/" : m) + "   ";
         });
-        print(outputLineContent.trim(), "placeholder");
-        done();
+        
+        suggestionsContainer.textContent = outputLineContent.trim();
+        suggestionsContainer.style.display = "block";
     }
-    return; // 确保Tab键逻辑在此结束
+    return;
 }
 
 
@@ -1430,19 +2043,23 @@ if (e.key === "Tab") {
   if (isComposing) return;
 
   if (e.key === "Backspace") {
+    clearSuggestions(); 
     e.preventDefault();
     if (cursorPosition > 0) {
       const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
       // Basic backspace, could be enhanced for ^H like behavior if needed
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
+      typingIO_cursor();
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
+    clearSuggestions(); 
     e.preventDefault();
     if (promptSymbol.style.display === "none" && commanding) return;
 
     const commandToProcess = buffer.trim();
+    // Save Command to history
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
          previousCommands.push(buffer);
          if (previousCommands.length > 50) previousCommands.shift(); // Limit history size
@@ -1464,6 +2081,7 @@ if (e.key === "Tab") {
 
   } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     e.preventDefault();
+    typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -1487,6 +2105,70 @@ function getChildrenAtPath(startDirNode, pathStr) {
         }
     }
     return currentDirNode.children;
+}
+
+// script.js
+
+// ... (after your findChildByTitleFileOrDir function is a good place) ...
+
+/**
+ * Recursively copies a bookmark node (file or folder).
+ * @param {object} sourceNode - The bookmark node to copy.
+ * @param {string} destParentId - The ID of the destination folder.
+ * @param {string} [newName=null] - Optional new name for the copied node.
+ */
+async function copyNodeRecursively(sourceNode, destParentId, newName = null) {
+  return new Promise((resolve, reject) => {
+    // For a single bookmark (file)
+    if (sourceNode.url) {
+      chrome.bookmarks.create({
+        parentId: destParentId,
+        title: newName || sourceNode.title,
+        url: sourceNode.url,
+      }, resolve);
+      return;
+    }
+
+    // For a folder
+    chrome.bookmarks.create({
+      parentId: destParentId,
+      title: newName || sourceNode.title,
+    }, (newFolder) => {
+      if (!sourceNode.children || sourceNode.children.length === 0) {
+        resolve(newFolder);
+        return;
+      }
+      // Recursively copy all children
+      const copyPromises = sourceNode.children.map(child =>
+        copyNodeRecursively(child, newFolder.id)
+      );
+      Promise.all(copyPromises).then(() => resolve(newFolder)).catch(reject);
+    });
+  });
+}
+
+/**
+ * Recursively finds files/folders matching a pattern.
+ * @param {object} startNode - The bookmark node to start searching from.
+ * @param {string} currentPath - The path string for the current node.
+ * @param {RegExp} regex - The regular expression to match against the title.
+ */
+function findRecursive(node, currentPath, regex) {
+  // Construct the relative path for the current node
+  const newPath = (currentPath === '.' ? './' : currentPath + '/') + node.title;
+
+  // Check if the current node's title matches the pattern
+  if (regex.test(node.title)) {
+    const className = node.children ? 'folder' : 'file';
+    print(newPath, className);
+  }
+
+  // If it's a directory, recurse into its children
+  if (node.children) {
+    node.children.forEach(child => {
+      findRecursive(child, newPath, regex);
+    });
+  }
 }
 
 
@@ -1630,7 +2312,8 @@ function detectBrowser() {
 }
 
 function welcomeMsg() {
-    print(`Terminal Startup - ${detectBrowser()}`);
+    const manifest = chrome.runtime.getManifest(); // 获取 manifest 数据
+    print(`Terminal Startup v${manifest.version} - ${detectBrowser()}`);
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
@@ -1655,6 +2338,132 @@ document.body.addEventListener("click", function(event) {
       // For simplicity, if they click typedText, it should gain focus. updateInputDisplay will handle caret.
   }
 });
+
+// Background and Theme 
+function applyTheme(themeName) {
+    document.body.className = `theme-${themeName}`;
+    promptTheme = themeName;
+    saveTheme();
+}
+
+function saveTheme() {
+  chrome.storage.sync.set({ theme: promptTheme });
+}
+
+function applyBackground(imageDataUrl, opacity) {
+    if (imageDataUrl) {
+        backgroundContainer.style.backgroundImage = `url(${imageDataUrl})`;
+        backgroundContainer.style.opacity = opacity;
+        promptOpacity = opacity;
+    } else {
+        // Apply default background or clear it
+        // backgroundContainer.style.backgroundImage = `url('https://pic.re/image')`;
+        // backgroundContainer.style.backgroundImage = `url('https://rpic.origz.com/api.php?category=pixiv')`;
+        backgroundContainer.style.backgroundImage = `url('${promptBgRandomAPI}')`;
+        backgroundContainer.style.opacity = promptOpacity;
+    }
+}
+
+function handleFileSelect(event) {
+    const file = event.target.files[0];
+    console.log(file);
+    if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const imageDataUrl = e.target.result;
+            // 使用 chrome.storage.local，因为它有更大的存储空间 (5MB)
+            if (imageDataUrl.length > 5 * 1024 * 1024) {
+                print("Error: Image is too large (max 5MB).", "error");
+                done();
+                return;
+            }
+            chrome.storage.local.set({ customBackground: imageDataUrl }, () => {
+                print("Background image uploaded successfully.", "success");
+                print("Use 'setbg' to apply it.", "hint");
+            });
+        };
+        reader.readAsDataURL(file);
+    }
+    done();
+}
+
+function checkForUpdates() {
+  try {
+    // 1. Check for update request 
+    chrome.runtime.requestUpdateCheck((status, details) => {
+      if (status === "update_available") {
+        print(`Get: Update found (version ${details.version}).`, "success");
+        print(``)
+        // The update will be downloaded. The onUpdateAvailable listener will handle the next step.
+      } else if (status === "no_update") {
+        print(`Hit: ${details.version} found`, "info")
+        console.log("No new update found."); //不在终端显示，保持整洁
+      } else if (status === "throttled") {
+        print("Update check is throttled. Please try again later.", "warning");
+      }
+      done();
+      print("");
+    });
+
+  } catch (e) {
+    // console.warn("Update check failed. This is expected if the extension is not installed from the store.", e);
+    print(e, "error");
+    print("Check Failed: This is expected if the extension is not installed from the store.", "error");
+    done();
+  }
+}
+
+async function applyUpdates() {
+  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y|n] ");
+  print(`Extension needs to be reloaded to update, reload now? [Y|n] ${user_input_content}`)
+  if (result) {
+    chrome.runtime.onUpdateAvailable.addListener((details) => {
+      print(`Fetched: ${details.version}`, 'info');
+      chrome.runtime.reload();
+    });
+  } else {
+    print("Abort")
+  }
+  done();
+  
+
+}
+
+function userInputMode(query) {
+  user_input_content = "";
+  return new Promise((resolve) => {
+    // 设置UI
+    input_mode = true;
+    awaiting();
+    promptSymbol.style.display = "inline-block";
+    promptSymbol.textContent = query;
+
+    // 启动一个定时器来检查用户输入
+    const intervalId = setInterval(() => {
+      const current = user_input_content.trim().toLowerCase(); // 获取输入并规范化
+      
+      if (current === ""){
+        
+      }
+      else if (current.toLowerCase() === "y") {
+        clearInterval(intervalId); // 重要！停止定时器，防止内存泄漏
+        input_mode = false;
+        buffer = "";
+        resolve(true); // 使用 resolve 来兑现承诺，并传递 true
+      } else if (current.toLowerCase() === "n") {
+        clearInterval(intervalId); // 重要！停止定时器
+        input_mode = false;
+        buffer = "";
+        resolve(false); // 使用 resolve 来兑现承诺，并传递 false
+      } else {
+        clearInterval(intervalId); // 重要！停止定时器
+        input_mode = false;
+        buffer = "";
+        resolve(false);
+      }
+    }, 100); // 100ms的间隔通常足够了，不必过于频繁
+  });
+}
 
 const inputLine = document.getElementById("input-line"); // Cache for click listener
 
