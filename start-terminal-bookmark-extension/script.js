@@ -345,7 +345,12 @@ const manPages = {
   "man": "NAME\n  man - format and display the on-line manual pages\n\nSYNOPSIS\n  man <command>\n\nDESCRIPTION\n  Displays the manual page for a given command.",
   "clear": "NAME\n  clear, cls - clear the terminal screen\n\nSYNOPSIS\n  clear\n  cls\n\nDESCRIPTION\n  Clears all previous output from the terminal screen.",
   "editlink": "NAME\n  editlink - change the URL of a bookmark\n\nSYNOPSIS\n  editlink <bookmark_name> <new_url>\n\nDESCRIPTION\n  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.",
-
+  "export": "NAME\n  export - set an environment variable\n\nSYNOPSIS\n  export <name>=<value>\n\nDESCRIPTION\n  Assigns <value> to the environment variable <name>. These variables can be used in commands with $name (e.g., `export Greet='Hello World'; echo $Greet`). Variables are now saved across sessions.",
+  "env": "NAME\n  env - display environment variables\n\nSYNOPSIS\n  env\n\nDESCRIPTION\n  Prints a list of all currently set environment variables.",
+  "tabs": "NAME\n  tabs - manage browser tabs\n\nSYNOPSIS\n  tabs [ls | close <id> | switch <id>]\n\nDESCRIPTION\n  Allows interaction with the browser's open tabs.\n\n  ls\t\tlist all open tabs with their IDs.\n  close <id>\tclose the tab with the specified ID.\n  switch <id>\tswitch to (activate) the tab with the specified ID.",
+  "downloads": "NAME\n  downloads - manage browser downloads\n\nSYNOPSIS\n  downloads [ls]\n\nDESCRIPTION\n  Allows interaction with the browser's downloads.\n\n  ls\t\tlist recent downloads with their IDs.",
+  "wget": "NAME\n  wget - download a file\n\nSYNOPSIS\n  wget <url>\n\nDESCRIPTION\n  Initiates a download for the given <url> and displays a progress bar.",
+  "grep": "NAME\n  grep - filter input\n\nSYNOPSIS\n  <command> | grep <pattern>\n\nDESCRIPTION\n  Filters the output of another command, showing only the lines that contain the specified <pattern>. It is case-insensitive.\n  Example: `history | grep ls`",
 };
 
 const previousCommands = [];
@@ -520,7 +525,7 @@ const commands = {
     return true;
   },
   youtube: (args, options) => {
-    if (args.length === 0) return "Usage: yt <query> [-b]";
+    if (args.length === 0) return "Usage: youtube <query> [-b]";
     const query = args.join(" ");
     if (options.b) {
       // If -b option is used, open in a new tab
@@ -1346,23 +1351,30 @@ const commands = {
     print("  find [-name <pat>]    - Find bookmarks/folders by name.");
     print("  nano <file>           - Edit a bookmark.");
     print("  editlink <file>       - Update a bookmark's url.");
-
     print("");
 
-    print("Account & System", "highlight");
-    print("  mslogin               - Log in with a Microsoft account.");
-    print("  mslogout              - Log out from Microsoft account.");
+    print("Browser & System Control", "highlight"); // <-- NEW SECTION
+    print("  tabs <ls|close|switch> - Manage browser tabs.");
+    print("  downloads <ls>        - List recent downloads.");
+    print("  wget <url>            - Download a file from a URL.");
+    print("  ping <host>           - Ping a host.");
     print("  date                  - Show current date and time.");
     print("  clear (or cls)        - Clear the terminal screen.");
-    print("  ping <host>           - Ping a host.");
     print("  locale                - Show browser language settings.");
     print("");
-    
-    print("Customization & History", "highlight");
-    print("  theme <name>          - Change terminal theme.");
-    print("  uploadbg / setbg      - Manage custom background.");
+
+    print("Shell, Environment & History", "highlight"); // <-- NEW SECTION
+    print("  export VAR=value      - Set an environment variable.");
+    print("  env                   - Display environment variables.");
+    print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
     print("  history               - Show command history.");
     print("  alias [name='cmd']    - Create or list command aliases.");
+    print("");
+    
+    print("Account & Customization", "highlight");
+    print("  mslogin / mslogout    - Log in/out with a Microsoft account.");
+    print("  theme <name>          - Change terminal theme.");
+    print("  uploadbg / setbg      - Manage custom background.");
     print("  man <command>         - Show the manual page for a command.");
     print("");
 
@@ -1372,7 +1384,7 @@ const commands = {
 };
 
 // Alias 
-commands.yt = commands.youtube;
+// commands.yt = commands.youtube;
 
 function parseCommandLine(input) {
   const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map(t => t.replace(/^"|"$/g, "")) || [];

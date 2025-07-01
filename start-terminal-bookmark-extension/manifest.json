@@ -3,8 +3,8 @@
   "name": "__MSG_appName__",
   "description": "__MSG_appDesc__",  
   "author": "Tian Yi, Bao",
-  "homepage_url": "https://www.tianyibrad.com",
-  "version": "1.4",
+  "homepage_url": "https://www.tianyibrad.com/projects/start_terminal",
+  "version": "1.5",
   "default_locale": "en",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
