@@ -352,6 +352,7 @@ const manPages = {
   "downloads": "NAME\n  downloads - manage browser downloads\n\nSYNOPSIS\n  downloads [ls]\n\nDESCRIPTION\n  Allows interaction with the browser's downloads.\n\n  ls\t\tlist recent downloads with their IDs.",
   "wget": "NAME\n  wget - download a file\n\nSYNOPSIS\n  wget <url>\n\nDESCRIPTION\n  Initiates a download for the given <url> and displays a progress bar.",
   "grep": "NAME\n  grep - filter input\n\nSYNOPSIS\n  <command> | grep <pattern>\n\nDESCRIPTION\n  Filters the output of another command, showing only the lines that contain the specified <pattern>. It is case-insensitive.\n  Example: `history | grep ls`",
+  "unset": "NAME\n  unset - unset environment variables\n\nSYNOPSIS\n  unset <name>\n\nDESCRIPTION\n  Removes the environment variable specified by <name>. This action is permanent for the current and future sessions.",
 };
 
 const previousCommands = [];
@@ -661,14 +662,36 @@ const commands = {
     }
     return outputLines;
   },
-  cd: (args, options) => {
-    if (!args) {
-      return "Usage: cd <directory>"
+  cd: (args) => {
+    if (args.length === 0) {
+      return "Usage: cd <directory>";
     }
-    changeDir(args);
+    const targetPath = args.join(' ');
+
+    if (targetPath === "..") {
+        if (path.length > 1) {
+            path.pop();
+            current = path[path.length - 1];
+            saveCurrentPath();
+        }
+    } else {
+        const result = findNodeByPath(targetPath);
+        if (result && result.node) {
+            current = result.node;
+            path = result.newPathArray;
+            saveCurrentPath();
+        } else {
+            print(`cd: ${targetPath}: No such file or directory`, "error");
+        }
+    }
+    update_user_path();
   },
   pwd: (args, options) => {
-    return path.map(p => p.title || "/home").join("/") || "/";
+    // We take the path array, ignore the first element (the root which has no title),
+    // map the rest to their titles, and join them with slashes.
+    // A single leading slash is added to represent the root directory.
+    const pathString = "/" + path.slice(1).map(p => p.title).join("/");
+    return pathString;
   },
   mkdir: (args) => {
     return new Promise((resolve) => {
@@ -1216,7 +1239,20 @@ const commands = {
     const key = match[1];
     const value = match[2];
     environmentVars[key] = value;
+    saveEnvironmentVars(); // Save to storage
     // No output on success, like bash
+  },
+  unset: (args) => {
+    if (args.length === 0) {
+        return "Usage: unset <VAR_NAME>";
+    }
+    const varName = args[0];
+    if (environmentVars.hasOwnProperty(varName)) {
+        delete environmentVars[varName];
+        saveEnvironmentVars(); // Save the change
+    } else {
+        return `unset: ${varName}: not found`;
+    }
   },
   env: (args, options, pipedInput) => {
     const output = [];
@@ -1366,6 +1402,7 @@ const commands = {
 
     print("Shell, Environment & History", "highlight"); // <-- NEW SECTION
     print("  export VAR=value      - Set an environment variable.");
+    print("  unset <VAR_NAME>      - Unset (delete) an environment variable.");
     print("  env                   - Display environment variables.");
     print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
     print("  history               - Show command history.");
@@ -1383,6 +1420,51 @@ const commands = {
     return ""; 
   },
 };
+
+/**
+ * Finds a bookmark node by a given path string (absolute or relative).
+ * @param {string} pathStr The path string, e.g., "MyFolder" or "/Work/Projects".
+ * @returns {{node: object, newPathArray: array}|null} The found node and its full path array, or null if not found.
+ */
+function findNodeByPath(pathStr) {
+
+    if (pathStr === '~') {
+        return { node: root, newPathArray: [root] };
+    }
+
+    let startNode = current;
+    let pathSegments = pathStr.split('/').filter(s => s.length > 0);
+    let newPathArray = [...path]; // Start with a copy of the current path for relative search
+
+    // Check for absolute path
+    if (pathStr.startsWith('/') || pathStr.startsWith('~/')) {
+        startNode = root;
+        newPathArray = [root];
+    }
+    
+    // If the path was just "/" or "~/", return the root
+    if (pathSegments.length === 0 && (pathStr.startsWith('/') || pathStr.startsWith('~/'))) {
+        return { node: root, newPathArray: [root] };
+    }
+
+    let currentNode = startNode;
+    for (const segment of pathSegments) {
+        if (!currentNode.children) {
+            return null; // Cannot traverse further
+        }
+        const foundNode = currentNode.children.find(child => child.title === segment && child.children);
+        
+        if (foundNode) {
+            currentNode = foundNode;
+            newPathArray.push(currentNode);
+        } else {
+            return null; // Segment not found or is not a directory
+        }
+    }
+
+    return { node: currentNode, newPathArray: newPathArray };
+}
+
 
 // Alias 
 // commands.yt = commands.youtube;
@@ -1837,7 +1919,7 @@ function handleSudoCheck(originalCommandStr) {
     if (command === 'rm' && options.r && !useSudo) {
         const target = args.join(' ') || '[directory]';
         print(`rm: cannot remove '${target}': Permission denied`, "error");
-        print(`This command would recursively delete '${target}', are you sudo? `, "warning")
+        print(`This command would recursively delete '${target}', are you sudo? `, "hint")
         return { canProceed: false, finalCommand: null }; // Block execution
     }
 
@@ -2005,7 +2087,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -2043,6 +2125,10 @@ async function loadSettings() {
 
   if (data.commandHistory) {
     previousCommands.push(...data.commandHistory);
+  }
+
+  if (data.environmentVars) {
+    environmentVars = data.environmentVars;
   }
 
   if (data.msAuth && data.msAuth.tokenInfo) {
@@ -2775,6 +2861,10 @@ function applyTheme(themeName) {
 
 function saveTheme() {
   chrome.storage.sync.set({ theme: promptTheme });
+}
+
+function saveEnvironmentVars() {
+  chrome.storage.sync.set({ environmentVars: environmentVars });
 }
 
 function applyBackground(imageDataUrl, opacity) {
