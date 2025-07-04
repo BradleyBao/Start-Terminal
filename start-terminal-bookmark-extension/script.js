@@ -712,7 +712,8 @@ const commands = {
             (newFolder) => {
                 if (chrome.runtime.lastError) {
                     print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
-                } else {
+                    resolve();
+                  } else {
                     print(`Directory '${newFolder.title}' created.`);
                     chrome.bookmarks.getSubTree(current.id, (results) => {
                         if (results && results[0]) {
