@@ -29,6 +29,7 @@ let outputHistory = [];
 
 let environmentVars = {};
 let wgetJobs = {};
+const SUDO_REQUIRED_COMMANDS = ['rm', 'apt'];
 
 let default_mode = false;
 let default_search_engine = "google";
@@ -1726,13 +1727,20 @@ async function executePipeline(pipelineStr) {
 
         const isLastInPipe = i === pipedCommands.length - 1;
 
+        // CLEANER SUDO HANDLING
+        const sudoCheckResult = handleSudoCheck(commandStr);
+        if (!sudoCheckResult.canProceed) {
+            continue; // Stop processing this command if sudo check fails
+        }
+        let finalCommand = sudoCheckResult.finalCommand;
+        // END OF NEW SUDO HANDLING 
+
         // --- Variable & Alias Expansion ---
-        let expandedCommand = expandVariables(commandStr);
-        let finalCommand = expandedCommand;
-        const firstWord = expandedCommand.split(' ')[0];
+        finalCommand = expandVariables(finalCommand);
+        const firstWord = finalCommand.split(' ')[0];
         if (aliases[firstWord]) {
             const aliasExpansion = aliases[firstWord];
-            const restOfInput = expandedCommand.substring(firstWord.length).trim();
+            const restOfInput = finalCommand.substring(firstWord.length).trim();
             finalCommand = `${aliasExpansion} ${restOfInput}`.trim();
             if (isLastInPipe) {
                  print(`> ${finalCommand}`, "hint");
@@ -1765,6 +1773,7 @@ async function executePipeline(pipelineStr) {
         }
 
         const { command, args, options } = parsed;
+
         const action = commands[command];
 
         if (action) {
@@ -1794,6 +1803,55 @@ async function executePipeline(pipelineStr) {
             previousOutput = null;
         }
     }
+}
+
+// in script.js, add this new helper function
+
+/**
+ * Checks if a command requires sudo and if it was used correctly.
+ * @param {string} originalCommandStr The raw command string from the user.
+ * @returns {{canProceed: boolean, finalCommand: string}} An object indicating if execution can proceed,
+ * and the command string with 'sudo' stripped off if it was present.
+ */
+function handleSudoCheck(originalCommandStr) {
+    let useSudo = false;
+    let commandToProcess = originalCommandStr.trim();
+
+    if (commandToProcess.startsWith('sudo ')) {
+        useSudo = true;
+        commandToProcess = commandToProcess.substring(5).trim(); // Get the actual command
+    }
+
+    // We need to parse the command to check its name and options
+    const parsed = parseCommandLine(commandToProcess);
+    if (!parsed) {
+        // If parsing fails, let the main loop handle the syntax error
+        return { canProceed: true, finalCommand: commandToProcess };
+    }
+
+    const { command, options, args } = parsed;
+
+    // --- The actual permission check ---
+
+    // Special case: 'rm -r' requires sudo
+    if (command === 'rm' && options.r && !useSudo) {
+        const target = args.join(' ') || '[directory]';
+        print(`rm: cannot remove '${target}': Permission denied`, "error");
+        print(`This command would recursively delete '${target}', are you sudo? `, "warning")
+        return { canProceed: false, finalCommand: null }; // Block execution
+    }
+
+    // General case for other commands in the sudo list
+    // We exclude 'rm' here because its sudo requirement is specifically for the -r option.
+    if (SUDO_REQUIRED_COMMANDS.includes(command) && command !== 'rm' && !useSudo) {
+        const userName = user || 'guest';
+        print(`Sorry, user ${userName} may not run '${command}' as root.`, "error");
+        print(`This incident will be reported.`, "info"); // The classic sudo error
+        return { canProceed: false, finalCommand: null }; // Block execution
+    }
+
+    // If all checks pass, allow execution
+    return { canProceed: true, finalCommand: commandToProcess };
 }
 
 async function executeLine(line) {
