@@ -1810,15 +1810,13 @@ async function executePipeline(pipelineStr) {
 
         const isLastInPipe = i === pipedCommands.length - 1;
 
-        // CLEANER SUDO HANDLING
         const sudoCheckResult = handleSudoCheck(commandStr);
         if (!sudoCheckResult.canProceed) {
-            continue; // Stop processing this command if sudo check fails
+            previousOutput = null; // Break the pipe if sudo check fails
+            continue;
         }
         let finalCommand = sudoCheckResult.finalCommand;
-        // END OF NEW SUDO HANDLING 
-
-        // --- Variable & Alias Expansion ---
+        
         finalCommand = expandVariables(finalCommand);
         const firstWord = finalCommand.split(' ')[0];
         if (aliases[firstWord]) {
@@ -1830,7 +1828,6 @@ async function executePipeline(pipelineStr) {
             }
         }
         
-        // --- ★★★ BUG FIX 1: Re-add the special check for './' commands ★★★ ---
         if (finalCommand.startsWith("./")) {
             let name = finalCommand.substring(2).trim();
             const target = findChildByTitleFileOrDir(current.children || [], name);
@@ -1845,40 +1842,44 @@ async function executePipeline(pipelineStr) {
             } else {
                 print(`${name}: No such file or bookmark.`, "error");
             }
-            continue; // Skip the rest of the pipeline logic for this command
+            previousOutput = null; // Break the pipe
+            continue;
         }
-        // --- End of Bug Fix 1 ---
 
         const parsed = parseCommandLine(finalCommand);
         if (!parsed) {
             if (isLastInPipe) print("Invalid command syntax.", "error");
+            previousOutput = null;
             continue;
         }
 
         const { command, args, options } = parsed;
-
         const action = commands[command];
 
         if (action) {
-            const result = await Promise.resolve(action(args, options, previousOutput));
+            const result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
             previousOutput = result;
 
             if (isLastInPipe) {
-                const isLsCommand = (command === 'ls' || (aliases[command] && aliases[command].startsWith('ls')));
-                if (typeof result === "string") {
-                    print(result);
+                // ★★★ NEW AND IMPROVED PRINTING LOGIC ★★★
+                if (typeof result === 'string') {
+                    // Check if this single string result is the ls-grid block
+                    const isLsGrid = result.includes('class="ls-grid-container"');
+                    print(result, 'info', isLsGrid);
                 } else if (Array.isArray(result)) {
-                  const allowHtmlForResult = isLsCommand;
-                    result.forEach(line => print(line, 'info', allowHtmlForResult));
+                    // For each line in the array, check if it looks like HTML
+                    result.forEach(line => {
+                        const lineStr = String(line);
+                        // A simple heuristic: if it has tags, treat it as HTML.
+                        const allowHtmlOnThisLine = lineStr.includes('<') && lineStr.includes('>');
+                        print(lineStr, 'info', allowHtmlOnThisLine);
+                    });
                 }
             }
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    const defaultAction = commands[default_search_engine];
-                    if (defaultAction) {
-                        defaultAction([command, ...args], options);
-                    }
+                    // ... (default mode logic) ...
                 } else {
                     print(`Unknown command: '${command}'`, "error");
                 }
