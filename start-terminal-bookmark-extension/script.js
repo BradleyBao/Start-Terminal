@@ -22,6 +22,8 @@ let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
 
+let activeGrepPattern = null;
+
 
 let isEditing = false; 
 let editingBookmarkId = null; 
@@ -1603,6 +1605,9 @@ async function ping_func(url, options) {
 
 // ! VERY IMPORTANT FUNCTION 
 function print(text, type = "info", allowHtml = false) {
+  if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
+    return; // If it doesn't match, simply don't print.
+  }
   // 1. Record this print action to our history log
   outputHistory.push({ text, type, allowHtml });
 
@@ -1641,6 +1646,9 @@ function print(text, type = "info", allowHtml = false) {
 
 
 function printLine(text, type = "info", endLine = false) {
+  if (activeGrepPattern && !activeGrepPattern.test(textStr)) {
+      return; // If it doesn't match, simply don't print.
+  }
   const lineWidth = output.clientWidth;
   const charWidth = CHARACTER_WIDTH;
 
@@ -1802,6 +1810,16 @@ function expandVariables(input) {
 
 async function executePipeline(pipelineStr) {
     const pipedCommands = pipelineStr.split('|').map(c => c.trim());
+
+    const lastCommand = pipedCommands[pipedCommands.length - 1];
+    if (lastCommand.startsWith('grep ')) {
+        const grepPattern = lastCommand.substring(5).trim();
+        if (grepPattern) {
+            activeGrepPattern = new RegExp(grepPattern, 'i');
+            pipedCommands.pop(); // Remove grep from the list of commands to execute
+        }
+    }
+
     let previousOutput = null;
 
     for (let i = 0; i < pipedCommands.length; i++) {
@@ -1887,6 +1905,7 @@ async function executePipeline(pipelineStr) {
             previousOutput = null;
         }
     }
+    activeGrepPattern = null; // Reset grep pattern after processing the pipeline
 }
 
 // in script.js, add this new helper function
@@ -1969,35 +1988,51 @@ async function processCommand(input) {
     return;
   }
 
-  // Treat every command as a list 
-  const commandList = input.split(";");
+  // --- NEW LOGIC for Pipe and Grep ---
+  let commandToRun = input;
+  activeGrepPattern = null; // Reset grep pattern for each new line
 
-  // Disable Inputting 
+  if (input.includes('|')) {
+    const parts = input.split('|').map(p => p.trim());
+    const firstPart = parts[0];
+    const restParts = parts.slice(1).join('|'); // Re-join in case of multiple pipes (future)
+
+    if (restParts.startsWith('grep ')) {
+      const grepPattern = restParts.substring(5).trim();
+      if (grepPattern) {
+        activeGrepPattern = new RegExp(grepPattern, 'i'); // Set the global pattern
+        commandToRun = firstPart; // We will only run the command before the pipe
+      }
+    }
+  }
+  // --- END of new logic ---
+
+  const commandList = commandToRun.split(";");
   awaiting();
 
-  for (const singleCommand of commandList) {
-    const trimmedCommand = singleCommand.trim();
-    if (trimmedCommand) {
-      // --- Alias ---
-      let commandToExecute = trimmedCommand;
-      const firstWord = trimmedCommand.split(' ')[0];
-      if (aliases[firstWord]) {
+  try {
+    for (const singleCommand of commandList) {
+      const trimmedCommand = singleCommand.trim();
+      if (trimmedCommand) {
+        let commandToExecute = trimmedCommand;
+        const firstWord = trimmedCommand.split(' ')[0];
+        if (aliases[firstWord]) {
           const aliasExpansion = aliases[firstWord];
           const restOfInput = trimmedCommand.substring(firstWord.length).trim();
           commandToExecute = `${aliasExpansion} ${restOfInput}`.trim();
           print(`> ${commandToExecute}`, "hint");
+        }
+        await proceedCommandCore(commandToExecute);
       }
-      // --- 别名扩展结束 ---
-
-      await proceedCommandCore(commandToExecute); // 等待每个命令顺序执行
     }
+  } finally {
+    // IMPORTANT: Ensure the grep pattern is always cleared after execution
+    activeGrepPattern = null; 
+    if (!commanding) {
+      done();
+    }
+    print("");
   }
-
-  // 在所有命令都执行完毕后，恢复一次输入
-  if (!commanding) {
-    done();
-  }
-  print(""); // 在最后打印一个空行
 }
 
 function awaiting() {
