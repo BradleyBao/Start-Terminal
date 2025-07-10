@@ -47,6 +47,9 @@ let path = [];
 
 let full_path = null;
 
+// Function to add privacy policy version 
+const PRIVACY_POLICY_VERSION = "1.1";
+
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
 // });
@@ -821,6 +824,13 @@ const commands = {
             });
         });
     });
+  },
+  'privacy-ok' : (args, options) => {
+    awaiting();
+    chrome.storage.sync.set({ privacyPolicyVersion: PRIVACY_POLICY_VERSION }, () => {
+        print("Thank you. The notice has been dismissed.", "success");
+    });
+    done();
   },
   // Theme 
   theme: (args, options) => {
@@ -2117,6 +2127,14 @@ async function refreshMicrosoftToken(refreshToken) {
   }
 }
 
+function showPrivacyUpdateNotice() {
+    print("Our Privacy Policy has been updated.", "highlight");
+    // print("Please review the changes at: ")
+    print("Please review the changes at: https://www.tianyibrad.com/docs/start_terminal_privacy_policy.", "info");
+    print("Type 'privacy-ok' to dismiss this message.", "hint");
+    print("");
+}
+
 // Load all settings 
 async function loadSettings() {
   // 1. 异步获取完整的书签树
@@ -2124,7 +2142,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -2180,6 +2198,11 @@ async function loadSettings() {
       user = user_info;
       print(`Welcome back, ${user_info}`, "success");
     }
+  }
+
+  if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+    // 如果隐私政策版本不匹配，显示提示并更新版本
+    setTimeout(() => showPrivacyUpdateNotice(), 100);
   }
 
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
