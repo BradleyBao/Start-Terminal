@@ -34,7 +34,7 @@ let wgetJobs = {};
 const SUDO_REQUIRED_COMMANDS = ['rm', 'apt'];
 
 let default_mode = false;
-let default_search_engine = "google";
+// let default_search_engine = "google";
 
 let aliases = {};
 
@@ -1925,7 +1925,10 @@ async function executePipeline(pipelineStr) {
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    // ... (default mode logic) ...
+                    const query = finalCommand; // The entire unrecognized input is the query
+                    const disposition = options.b ? "NEW_TAB" : "CURRENT_TAB";
+                    
+                    chrome.search.query({ text: query, disposition: disposition });
                 } else {
                     print(`Unknown command: '${command}'`, "error");
                 }
@@ -2193,7 +2196,7 @@ async function loadSettings() {
     
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
-    default_search_engine = data.settings.default_search_engine ?? "google";
+    // default_search_engine = data.settings.default_search_engine ?? "google";
   }
 
   if (data.commandHistory) {
