@@ -10,7 +10,7 @@ const editorView = document.getElementById("editor-view");
 const editorTitleInput = document.getElementById("editor-title");
 const editorUrlInput = document.getElementById("editor-url"); 
 const editorStatus = document.getElementById("editor-status"); 
-const supported_search_engine = ["google", "bing", "baidu"];
+// const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
@@ -40,7 +40,7 @@ let aliases = {};
 
 let user = ""
 
-const BROWSER_TYPE = detectBrowser();
+// const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
 let path = [];
@@ -358,6 +358,8 @@ const manPages = {
   "wget": "NAME\n  wget - download a file\n\nSYNOPSIS\n  wget <url>\n\nDESCRIPTION\n  Initiates a download for the given <url> and displays a progress bar.",
   "grep": "NAME\n  grep - filter input\n\nSYNOPSIS\n  <command> | grep <pattern>\n\nDESCRIPTION\n  Filters the output of another command, showing only the lines that contain the specified <pattern>. It is case-insensitive.\n  Example: `history | grep ls`",
   "unset": "NAME\n  unset - unset environment variables\n\nSYNOPSIS\n  unset <name>\n\nDESCRIPTION\n  Removes the environment variable specified by <name>. This action is permanent for the current and future sessions.",
+  "default": "NAME\n  default - toggle the default action for unknown commands\n\nSYNOPSIS\n  default [on | off]\n\nDESCRIPTION\n  Controls the terminal's behavior when an unrecognized command is entered. Running `default` with no arguments will display the current mode.\n\n  on\tWhen this mode is enabled, any text that is not a valid command will be automatically treated as a web search query. This provides convenience by allowing you to search without typing the 'search' command first.\n\n  off\tThis is the standard mode. Unknown commands will result in an 'Unknown command' error, requiring you to explicitly use the 'search' command for web queries.\n\nEXAMPLES\n  default on\n  > cats and dogs  (This will now perform a search)\n\n  default off\n  > cats and dogs  (This will now produce an error)",
+  "search": "NAME\n  search - perform a web search\n\nSYNOPSIS\n  search [-b] <query>\n\nDESCRIPTION\n  Performs a search using the user's default search engine configured in the browser's main settings. This is the primary and policy-compliant way to search the web from the terminal.\n\nOPTIONS\n  -b\tOpens the search results in a new background tab, allowing you to continue working in the terminal.",
 };
 
 const previousCommands = [];
@@ -471,39 +473,39 @@ function findChildByTitleFileOrDir(children, title) { // For general lookup (fil
 
 
 const commands = {
-  google: (args, options) => {
-    if (args.length === 0) return "Usage: google <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-    return true;
-  },
-  bing: (args, options) => {
-    if (args.length === 0) return "Usage: bing <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-    return true;
-  },
-  baidu: (args, options) => {
-    if (args.length === 0) return "Usage: baidu <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
-    return true;
-  },
+  // google: (args, options) => {
+  //   if (args.length === 0) return "Usage: google <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // bing: (args, options) => {
+  //   if (args.length === 0) return "Usage: bing <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // baidu: (args, options) => {
+  //   if (args.length === 0) return "Usage: baidu <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
   goto: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: goto <url> [-b]";
@@ -531,39 +533,53 @@ const commands = {
     location.href = url;
     return true;
   },
-  youtube: (args, options) => {
-    if (args.length === 0) return "Usage: youtube <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
-      return true;
+  search: (args, options) => {
+    if (args.length === 0) {
+        return "Usage: search [-b] <query>";
     }
-    location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-    return true;
-  },
-  bilibili: (args, options) => {
-    if (args.length === 0) return "Usage: bilibili <query> [-b]";
     const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
-    return true;
+
+    // Uses the official Chrome Search API.
+    // This will automatically use the user's default search engine set in Chrome settings.
+    chrome.search.query({
+        text: query,
+        // If -b option is used, open in a new tab, otherwise search in the current tab.
+        disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" 
+    });
   },
-  spotify: (args, options) => {
-    if (args.length === 0) return "Usage: spotify <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
-    return true;
-  },
+  // youtube: (args, options) => {
+  //   if (args.length === 0) return "Usage: youtube <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // bilibili: (args, options) => {
+  //   if (args.length === 0) return "Usage: bilibili <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // spotify: (args, options) => {
+  //   if (args.length === 0) return "Usage: spotify <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
+  //   return true;
+  // },
   ping: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: ping <host> [-t] [-n <count>]";
@@ -935,7 +951,7 @@ const commands = {
   default: (args, options) => {
     // Change the default search engine
     if (args.length === 0) {
-      print(`Current default search engine is ${default_search_engine}`, "highlight");
+      // print(`Current default search engine is ${default_search_engine}`, "highlight");
       print(`Current default mode is ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
       return "Usage: default <search engine> (google, bing, baidu)";
     }
@@ -949,19 +965,20 @@ const commands = {
       print("Default mode is off. ", "success");
       print("To turn it on, type 'default on'");
     }
-    else if (supported_search_engine.includes(arg)){
-      default_search_engine = arg;
-      if (!default_mode) {
-        print(`Successfully changed default search engine to ${arg}`);
-        print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
-      }
-    }
-    else {
-      print(`Unable to change default search engine: ${arg} is not supported.`, "error");
-    }
+    // else if (supported_search_engine.includes(arg)){
+    //   default_search_engine = arg;
+    //   if (!default_mode) {
+    //     print(`Successfully changed default search engine to ${arg}`);
+    //     print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
+    //   }
+    // }
+    // else {
+    //   print(`Unable to change default search engine: ${arg} is not supported.`, "error");
+    // }
     saveDefaultSettings();
 
   },
+  
   mslogin: () => {
     print("Logging in with Microsoft");
     awaiting();
@@ -1374,12 +1391,13 @@ const commands = {
     print("");
 
     print("Search Commands", "highlight");
-    print("  google <query> [-b]   - Search with Google.");
-    print("  bing <query> [-b]     - Search with Bing.");
-    print("  baidu <query> [-b]    - Search with Baidu.");
-    print("  yt <query> [-b]       - Search with YouTube.");
-    print("  bilibili <query> [-b] - Search with Bilibili.");
-    print("  spotify <query> [-b]  - Search with Spotify.");
+    // print("  google <query> [-b]   - Search with Google.");
+    // print("  bing <query> [-b]     - Search with Bing.");
+    // print("  baidu <query> [-b]    - Search with Baidu.");
+    // print("  yt <query> [-b]       - Search with YouTube.");
+    // print("  bilibili <query> [-b] - Search with Bilibili.");
+    // print("  spotify <query> [-b]  - Search with Spotify.");
+    print("  search <query> [-b]   - Search using your browser's default engine.");
     print("");
     
     print("Navigation & Bookmarks", "highlight");
@@ -2068,7 +2086,7 @@ function done() {
 // SETTINGS 
 function saveDefaultSettings() {
   const settings = {
-    default_search_engine: default_search_engine,
+    // default_search_engine: default_search_engine,
     default_mode: default_mode,
   };
   chrome.storage.sync.set({ settings });
@@ -2891,11 +2909,11 @@ function welcomeMsg() {
     print("");
     print("Type 'help' for a list of commands.");
     print("");
-    print("Default Search Engine:");
-    print(`  - Current: ${default_search_engine}`, "highlight");
-    print(`  - Current default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
-    print("  - Supported: google, bing, baidu");
-    print("  - Change with: default <search engine|on|off>", "hint");
+    // print("Search By Default:");
+    // print(`  - Current: ${default_search_engine}`, "highlight");
+    print(`Search by default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
+    // print("  - Supported: google, bing, baidu");
+    // print("  - Change with: default <search engine|on|off>", "hint");
     print("");
 }
 
