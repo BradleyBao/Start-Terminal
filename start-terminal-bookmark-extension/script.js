@@ -1889,7 +1889,7 @@ async function executePipeline(pipelineStr) {
             previousOutput = result;
 
             if (isLastInPipe) {
-                // ★★★ NEW AND IMPROVED PRINTING LOGIC ★★★
+                
                 if (typeof result === 'string') {
                     // Check if this single string result is the ls-grid block
                     const isLsGrid = result.includes('class="ls-grid-container"');
@@ -1907,7 +1907,10 @@ async function executePipeline(pipelineStr) {
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    // ... (default mode logic) ...
+                    const defaultAction = commands[default_search_engine];
+                    if (defaultAction) {
+                        defaultAction([command, ...args], options);
+                    }
                 } else {
                     print(`Unknown command: '${command}'`, "error");
                 }
