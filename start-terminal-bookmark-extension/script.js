@@ -348,6 +348,7 @@ const manPages = {
   "find": "NAME\n  find - search for files in a directory hierarchy\n\nSYNOPSIS\n  find [path] -name <pattern>\n\nDESCRIPTION\n  Searches for bookmarks/folders matching the <pattern> within the given [path] or current directory.\n  The pattern can include a wildcard '*' (e.g., 'find -name \"*search*\").",
   "history": "NAME\n  history - display command history\n\nSYNOPSIS\n  history\n\nDESCRIPTION\n  Displays the list of previously executed commands.",
   "alias": "NAME\n  alias - create a shortcut for a command\n\nSYNOPSIS\n  alias\n  alias <name>='<command>'\n\nDESCRIPTION\n  'alias' with no arguments prints the list of aliases.\n  'alias name='command'' defines an alias 'name' for 'command'. Quotes are important for commands with spaces.",
+  "unalias": "NAME\n  unalias - remove aliases\n\nSYNOPSIS\n  unalias <alias_name>\n\nDESCRIPTION\n  Removes the alias specified by <alias_name> from the list of defined aliases. This change is saved and will persist across sessions.",
   "touch": "NAME\n  touch - create a new, empty bookmark\n\nSYNOPSIS\n  touch <filename>\n\nDESCRIPTION\n  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.",
   "man": "NAME\n  man - format and display the on-line manual pages\n\nSYNOPSIS\n  man <command>\n\nDESCRIPTION\n  Displays the manual page for a given command.",
   "clear": "NAME\n  clear, cls - clear the terminal screen\n\nSYNOPSIS\n  clear\n  cls\n\nDESCRIPTION\n  Clears all previous output from the terminal screen.",
@@ -1195,6 +1196,20 @@ const commands = {
       chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
       return `Alias '${name}' set.`;
   },
+  unalias: (args) => {
+      if (args.length === 0) {
+          return "Usage: unalias <alias_name>";
+      }
+      const aliasName = args[0];
+
+      if (aliases.hasOwnProperty(aliasName)) {
+          delete aliases[aliasName]; // Remove the alias from our object
+          chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          return `Alias removed: ${aliasName}`;
+      } else {
+          return `unalias: no such alias: ${aliasName}`;
+      }
+  },
   
   man: (args, options) => {
       if (args.length === 0) {
@@ -1426,6 +1441,7 @@ const commands = {
     print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
     print("  history               - Show command history.");
     print("  alias [name='cmd']    - Create or list command aliases.");
+    print("  unalias <name>        - Remove an alias.");
     print("");
     
     print("Account & Customization", "highlight");
