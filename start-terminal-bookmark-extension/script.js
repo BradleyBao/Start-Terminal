@@ -2049,6 +2049,7 @@ async function processCommand(input) {
 }
 
 function awaiting() {
+  commanding = true;
   typedText.innerHTML = "";
   // blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
@@ -2056,6 +2057,7 @@ function awaiting() {
 }
 
 function done() {
+  commanding = false;
   promptSymbol.style.display = "inline";
   // promptSymbol.textContent = full_path + " "; // update_user_path handles this or it's set on load
   update_user_path(); // Ensure prompt is fresh
