@@ -334,6 +334,57 @@ body.theme-cmd {
   color: var(--success-color);
 }
 
+/* Style for the Vim mode indicator in the footer */
+#editor-footer .mode-indicator {
+  font-weight: bold;
+  padding: 0 0.5rem;
+  margin-right: 1rem;
+  text-transform: uppercase;
+  color: #000;
+  background-color: #fff;
+}
+
+#editor-command-line {
+  margin-top: auto; /* Push it down towards the footer */
+  padding: 0.2rem 0;
+  line-height: 1.2;
+}
+
+#editor-command-line-input {
+  outline: none;
+  width: 100%;
+}
+
+/* Make input fields look different in Vim's Normal mode */
+#editor-view.vim-normal-mode input {
+  background-color: #222; /* Darker, inactive look */
+  border-color: #444;
+}
+#editor-view.vim-normal-mode input:focus {
+  background-color: #2a2a2a;
+  border-color: var(--hint-color); /* Highlight focused field */
+}
+
+#editor-textarea {
+  flex-grow: 1; /* Take up all available space */
+  background-color: var(--background-color);
+  color: var(--foreground-color);
+  border: 1px solid #555;
+  padding: 0.5rem;
+  font-family: var(--terminal-font); /* Use monospace font */
+  font-size: 1rem;
+  outline: none;
+  resize: none; /* Disable manual resizing */
+  white-space: pre; /* Respect spaces and newlines */
+  overflow-wrap: normal;
+  display: none; /* Hidden by default */
+}
+
+/* Container for nano's input fields */
+#nano-fields {
+    display: none; /* Hidden by default */
+}
+
 /* The main container for the ls grid output */
 .ls-grid-container {
   display: grid;
