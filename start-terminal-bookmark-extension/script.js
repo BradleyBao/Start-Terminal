@@ -227,6 +227,7 @@ async function loginWithMicrosoft() {
             done();
         });
     });
+    commanding = false;
 }
 // 调用函数
 // loginWithMicrosoft();
@@ -965,6 +966,7 @@ const commands = {
   mslogin: () => {
     print("Logging in with Microsoft");
     awaiting();
+    commanding = true;
     loginWithMicrosoft();
   },
   mslogout: () => {
@@ -977,9 +979,11 @@ const commands = {
     let arg = args[0];
     if (arg == "update") {
       awaiting();
+      commanding = true;
       checkForUpdates();
     } else if (arg == "upgrade") {
       awaiting();
+      commanding = true;
       applyUpdates();
     }
   },
@@ -990,9 +994,11 @@ const commands = {
     let arg = args[0];
     if (arg == "update") {
       awaiting();
+      commanding = true;
       checkForUpdates();
     } else if (arg == "upgrade") {
       awaiting();
+      commanding = true;
       applyUpdates();
     }
   },
@@ -2049,7 +2055,6 @@ async function processCommand(input) {
 }
 
 function awaiting() {
-  commanding = true;
   typedText.innerHTML = "";
   // blockCursor.style.display = "none";
   promptSymbol.style.display = "none";
@@ -2057,7 +2062,6 @@ function awaiting() {
 }
 
 function done() {
-  commanding = false;
   promptSymbol.style.display = "inline";
   // promptSymbol.textContent = full_path + " "; // update_user_path handles this or it's set on load
   update_user_path(); // Ensure prompt is fresh
@@ -2993,6 +2997,7 @@ function checkForUpdates() {
     print("Check Failed: This is expected if the extension is not installed from the store.", "error");
     done();
   }
+  commanding = false;
 }
 
 async function applyUpdates() {
@@ -3007,7 +3012,7 @@ async function applyUpdates() {
     print("Abort")
   }
   done();
-  
+  commanding = false;
 
 }
 
