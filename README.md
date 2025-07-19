@@ -6,7 +6,8 @@ A terminal-like browser starting page.
 
 ## Downloads
 * Get it from [Microsoft Addons](https://microsoftedge.microsoft.com/addons/detail/pkaikemmelhclbkndohcoffnenhhhihp). 
-* Get it from [Github](https://github.com/BradleyBao/Start-Terminal/releases). 
+* Get it from [Github](https://github.com/BradleyBao/Start-Terminal/releases).
+* Get it from [Google Extension](https://chromewebstore.google.com/detail/start-terminal/hofionhfdcnjfohpmgjbkgfajddanhdh).
  
 ## To begin with 
 ```shell
@@ -18,12 +19,13 @@ help
 --- Terminal Help ---
 
 Search Commands
-  google <query> [-b]   - Search with Google.
-  bing <query> [-b]     - Search with Bing.
-  baidu <query> [-b]    - Search with Baidu.
-  yt <query> [-b]       - Search with YouTube.
-  bilibili <query> [-b] - Search with Bilibili.
-  spotify <query> [-b]  - Search with Spotify.
+  google <query> [-b]   - Search with Google. (Only in MS Addon)
+  bing <query> [-b]     - Search with Bing. (Only in MS Addon)
+  baidu <query> [-b]    - Search with Baidu. (Only in MS Addon)
+  yt <query> [-b]       - Search with YouTube. (Only in MS Addon)
+  bilibili <query> [-b] - Search with Bilibili. (Only in MS Addon)
+  spotify <query> [-b]  - Search with Spotify. (Only in MS Addon)
+  search <query> [-b]   - Search with default search engine. (Only in Google Extension)
 
 Theme & Background
   theme <theme_name>    - Change terminal theme (default, ubuntu, powershell, cmd, kali, debian).
