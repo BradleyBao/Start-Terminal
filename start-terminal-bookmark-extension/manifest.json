@@ -4,7 +4,7 @@
   "description": "__MSG_appDesc__",  
   "author": "Tian Yi, Bao",
   "homepage_url": "https://www.tianyibrad.com/projects/start_terminal",
-  "version": "1.7",
+  "version": "1.8",
   "default_locale": "en",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
@@ -21,9 +21,15 @@
     "downloads.open",
     "search"],
   "host_permissions": [
-    "https://login.microsoftonline.com/*",
-    "https://graph.microsoft.com/*"
+    "https://www.googleapis.com/*"
   ],
+  "oauth2": {
+    "client_id": "627153522315-leuqgnns62umcui4qmhe5k4odapvionc.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
+  },
   "action": {
     "default_icon": "icons/icon128.png"
   }

@@ -76,161 +76,6 @@ function update_user_path() {
   promptSymbol.textContent = full_path;
 }
 
-// =================================================================
-// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
-// =================================================================
-async function loginWithMicrosoft() {
-    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
-
-    // --- PKCE Help Function ---
-    // 1. 创建一个随机字符串作为 code_verifier
-    function generateCodeVerifier() {
-        const randomBytes = new Uint8Array(32);
-        crypto.getRandomValues(randomBytes);
-        return btoa(String.fromCharCode.apply(null, randomBytes))
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    }
-
-    // 2. 用 SHA-256 哈希 verifier 来创建 code_challenge
-    async function generateCodeChallenge(verifier) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(verifier);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        return btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuffer)))
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    }
-    // --- PKCE Help Function ---
-
-
-    // 1. Generate PKCE code_verifier and code_challenge
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
-
-
-    // 2. Construct Microsoft Authorization URL
-    const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
-    authUrl.searchParams.append('client_id', MS_CLIENT_ID);
-    authUrl.searchParams.append('response_type', 'code'); // <--- 关键变化
-    authUrl.searchParams.append('redirect_uri', chrome.identity.getRedirectURL());
-    authUrl.searchParams.append('scope', 'https://graph.microsoft.com/User.Read');
-    authUrl.searchParams.append('response_mode', 'query'); // <--- 推荐使用 'query'
-    // Add PKCE parameters
-    authUrl.searchParams.append('code_challenge', codeChallenge);
-    authUrl.searchParams.append('code_challenge_method', 'S256');
-
-    console.log("Opening URL:", authUrl.href);
-    print("Opening Microsoft login page...", "info");
-
-    // 3. Start Web Auth (code)
-    chrome.identity.launchWebAuthFlow({
-        url: authUrl.href,
-        interactive: true
-    }, (redirectUrl) => {
-        if (chrome.runtime.lastError || !redirectUrl) {
-            console.error("Auth Failed:", chrome.runtime.lastError?.message);
-            
-            print("Auth Failed: " + (chrome.runtime.lastError?.message || "Unknown Error"), "error");
-            print("");
-
-            done();
-            return;
-        }
-        
-        // 4. 从重定向URL中解析出 "code"
-        const url = new URL(redirectUrl);
-        const code = url.searchParams.get('code');
-
-        if (!code) {
-            // 这里处理 redirectUrl 中返回的错误信息
-            const error = url.searchParams.get('error_description') || "Failed to get code";
-            console.error("Failed to get code:", error);
-            print("Failed to get code: " + error, "error");
-            // 可以在此处向用户显示更友好的错误信息
-            if (error.includes("'token' is disabled")) {
-                console.error("Failed to login, please contact the developer.");
-                print("Failed to login, please contact the developer.", "error");
-            }
-            print("");
-            done();
-            return;
-        }
-
-        console.log("Successfully get code");
-        print("Successfully get code", "success");
-
-        // 5. Exchange to Access Token
-        const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-        const params = new URLSearchParams();
-        params.append('client_id', MS_CLIENT_ID);
-        params.append('scope', 'https://graph.microsoft.com/User.Read');
-        params.append('code', code);
-        params.append('redirect_uri', chrome.identity.getRedirectURL());
-        params.append('grant_type', 'authorization_code');
-        // Send verifier to verify
-        params.append('code_verifier', codeVerifier);
-
-        fetch(tokenUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: params
-        })
-        .then(response => response.json())
-        .then(tokenInfo => {
-            if (tokenInfo.error) {
-                console.error("Token Exchange Failed:", tokenInfo.error_description);
-                print("Token Exchange Failed: " + tokenInfo.error_description, "error");
-                print("");
-                done();
-                return Promise.reject(tokenInfo.error_description); // 中断链条
-            }
-            
-            const accessToken = tokenInfo.access_token;
-            console.log("Successfully get Access Token!");
-            print("Successfully get Access Token", "success");
-
-            // 6. 使用 Access Token 获取用户信息
-            return fetch('https://graph.microsoft.com/v1.0/me', {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            })
-            .then(response => response.json())
-            .then(userInfo => ({ userInfo, tokenInfo })); // 将两个结果一起向下传递
-        })
-        .then(({ userInfo, tokenInfo }) => { // 接收包含两个信息的对象
-            if (userInfo.error) {
-                console.error("Failed to get user info:", userInfo.error.message);
-                print("Failed to get user info: " + userInfo.error.message, "error");
-                return;
-            }
-
-            // --- 这是关键的保存逻辑 ---
-            const expirationTime = Date.now() + (tokenInfo.expires_in * 1000);
-            const msAuthData = { userInfo, tokenInfo, expirationTime };
-            chrome.storage.sync.set({ msAuth: msAuthData }, () => {
-              console.log('Microsoft auth data saved.');
-            });
-            // --- 保存逻辑结束 ---
-
-            const user_info = userInfo.userPrincipalName || userInfo.displayName;
-            print(`Welcome, ${user_info}`, "success");
-            user = user_info;
-            update_user_path();
-            print("");
-            done();
-        })
-        .catch(error => {
-            // 确保不会因为我们中断链条而报错
-            if (typeof error === 'string') return; 
-            
-            console.error("An Unknown Error occurred:", error);
-            print("An Unknown Error occurred: " + (error.message || error), "error");
-            print("");
-            done();
-        });
-    });
-    commanding = false;
-}
-// 调用函数
-// loginWithMicrosoft();
 
 // Helper function to set caret position in contenteditable elements
 function setCaretAtOffset(element, offset) {
@@ -286,6 +131,73 @@ function setCaretAtOffset(element, offset) {
     if (document.activeElement !== element) {
         element.focus();
     }
+}
+
+// in script.js, add these two new functions
+
+function loginWithGoogle() {
+    // This uses Chrome's built-in Google auth helper, which is simpler than the manual flow.
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+        if (chrome.runtime.lastError || !token) {
+            print(`Google Auth Failed: ${chrome.runtime.lastError?.message || "User cancelled."}`, "error");
+            print("");
+            done();
+            commanding = false;
+            return;
+        }
+
+        // Use the token to get user info
+        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(response => response.json())
+        .then(userInfo => {
+            if (userInfo.error) {
+                throw new Error(userInfo.error.message);
+            }
+
+            const gAuthData = { userInfo, token }; // Store user info and token
+            chrome.storage.sync.set({ gAuth: gAuthData, activeLogin: 'google' });
+            
+            user = userInfo.email || userInfo.name;
+            print(`Welcome, ${user}`, "success");
+            update_user_path();
+            print("");
+            done();
+        })
+        .catch(error => {
+            print(`Failed to get user info: ${error.message}`, "error");
+            print("");
+            done();
+        });
+        commanding = false;
+    });
+    
+}
+
+function logoutWithGoogle() {
+    chrome.storage.sync.get('gAuth', (data) => {
+        if (data.gAuth && data.gAuth.token) {
+            const token = data.gAuth.token;
+            // 1. Revoke the token to invalidate it on Google's side
+            fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
+            
+            // 2. Remove the token from Chrome's local cache
+            chrome.identity.removeCachedAuthToken({ token: token });
+        }
+
+        // 3. Clear our stored data
+        chrome.storage.sync.remove(['gAuth', 'activeLogin'], () => {
+            user = "";
+            update_user_path();
+            print("Logged out from Google.", "success");
+            print("");
+            
+        });
+        
+    });
+    commanding = false;
+    
 }
 
 
@@ -362,6 +274,8 @@ const manPages = {
   "unset": "NAME\n  unset - unset environment variables\n\nSYNOPSIS\n  unset <name>\n\nDESCRIPTION\n  Removes the environment variable specified by <name>. This action is permanent for the current and future sessions.",
   "default": "NAME\n  default - toggle the default action for unknown commands\n\nSYNOPSIS\n  default [on | off]\n\nDESCRIPTION\n  Controls the terminal's behavior when an unrecognized command is entered. Running `default` with no arguments will display the current mode.\n\n  on\tWhen this mode is enabled, any text that is not a valid command will be automatically treated as a web search query. This provides convenience by allowing you to search without typing the 'search' command first.\n\n  off\tThis is the standard mode. Unknown commands will result in an 'Unknown command' error, requiring you to explicitly use the 'search' command for web queries.\n\nEXAMPLES\n  default on\n  > cats and dogs  (This will now perform a search)\n\n  default off\n  > cats and dogs  (This will now produce an error)",
   "search": "NAME\n  search - perform a web search\n\nSYNOPSIS\n  search [-b] <query>\n\nDESCRIPTION\n  Performs a search using the user's default search engine configured in the browser's main settings. This is the primary and policy-compliant way to search the web from the terminal.\n\nOPTIONS\n  -b\tOpens the search results in a new background tab, allowing you to continue working in the terminal.",
+  "glogin": "NAME\n  glogin - log in with a Google account\n\nSYNOPSIS\n  glogin\n\nDESCRIPTION\n  Initiates the Google OAuth 2.0 flow to securely log you in. Your email address will be displayed in the prompt.",
+  "glogout": "NAME\n  glogout - log out from your Google account\n\nSYNOPSIS\n  glogout\n\nDESCRIPTION\n  Logs you out from your Google account, revokes the authentication token, and clears stored credentials.",
 };
 
 const previousCommands = [];
@@ -981,14 +895,26 @@ const commands = {
 
   },
   
-  mslogin: () => {
-    print("Logging in with Microsoft");
+  // mslogin: () => {
+  //   print("Logging in with Microsoft");
+  //   awaiting();
+  //   commanding = true;
+  //   loginWithMicrosoft();
+  // },
+  // mslogout: () => {
+  //   logoutWithMicrosoft();
+  // },
+  glogin: () => {
+    print("Logging in with Google");
     awaiting();
     commanding = true;
-    loginWithMicrosoft();
+    loginWithGoogle();
   },
-  mslogout: () => {
-    logoutWithMicrosoft();
+  glogout: () => {
+    print("Logging out from Google"); 
+    awaiting();
+    commanding = true;
+    logoutWithGoogle();
   },
   apt: (args) => {
     if (args.length === 0) {
@@ -1464,7 +1390,8 @@ const commands = {
     print("");
     
     print("Account & Customization", "highlight");
-    print("  mslogin / mslogout    - Log in/out with a Microsoft account.");
+    print("  glogin                - Log in with your Google account.");
+    print("  glogout               - Log out from your Google account.");
     print("  theme <name>          - Change terminal theme.");
     print("  uploadbg / setbg      - Manage custom background.");
     print("  man <command>         - Show the manual page for a command.");
@@ -1554,15 +1481,15 @@ function parseCommandLine(input) {
   return { command, args, options };
 }
 
-function logoutWithMicrosoft() {
-  chrome.storage.sync.remove('msAuth', () => {
-      user = "";
-      update_user_path();
-      print("Logged out from Microsoft.", "success");
-      print("");
-      done();
-    });
-  }
+// function logoutWithMicrosoft() {
+//   chrome.storage.sync.remove('msAuth', () => {
+//       user = "";
+//       update_user_path();
+//       print("Logged out from Microsoft.", "success");
+//       print("");
+//       done();
+//     });
+//   }
 
 // Add this helper function somewhere in your script.
 function displayTree(node, prefix = '', isLast = true) {
@@ -2186,7 +2113,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'gAuth', 'activeLogin']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -2230,18 +2157,9 @@ async function loadSettings() {
     environmentVars = data.environmentVars;
   }
 
-  if (data.msAuth && data.msAuth.tokenInfo) {
-    let currentAuth = data.msAuth;
-    if (Date.now() > currentAuth.expirationTime) {
-      // Token 过期，尝试刷新
-      currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
-    }
-
-    if (currentAuth) {
-      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
-      user = user_info;
-      print(`Welcome back, ${user_info}`, "success");
-    }
+  if (data.activeLogin === 'google' && data.gAuth && data.gAuth.userInfo) {
+      user = data.gAuth.userInfo.email || data.gAuth.userInfo.name;
+      print(`Welcome back, ${user}`, "success");
   }
 
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
@@ -2480,7 +2398,7 @@ document.body.addEventListener("keydown", async e => {
 
   if (e.key.toLowerCase() === "d" && control_cmd) {
     e.preventDefault();
-    logoutWithMicrosoft();
+    logoutWithGoogle();
     return;
   }
   
