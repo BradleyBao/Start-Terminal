@@ -171,6 +171,72 @@ body.theme-cmd {
   */
 }
 
+/* --- Cursor Style Modifications --- */
+
+.cursor, .highlighted-char {
+    position: relative;
+}
+
+/* --- Bar Style ('|') --- */
+.cursor-style-bar .cursor {
+    color: transparent; /* Hide the original '_' text */
+    background-color: transparent;
+}
+.cursor-style-bar .cursor::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px; /* Position it precisely at the start */
+    width: 2px;
+    background-color: var(--cursor-color);
+    /* The main .cursor already has the blink animation, which is inherited */
+}
+
+.cursor-style-bar .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color); /* Ensure original character is visible */
+}
+.cursor-style-bar .highlighted-char::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px;
+    width: 2px;
+    background-color: var(--cursor-color);
+}
+
+
+/* --- Underline Style ('_') --- */
+.cursor-style-underline .cursor {
+    color: transparent; /* Hide the original '_' text */
+    background-color: transparent;
+}
+.cursor-style-underline .cursor::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
+}
+
+.cursor-style-underline .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color);
+}
+.cursor-style-underline .highlighted-char::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
+}
+
 /* Style for IME composing text */
 .composing-text {
   text-decoration: underline;

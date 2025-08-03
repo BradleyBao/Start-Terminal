@@ -24,6 +24,8 @@ let isComposing = false; // For IME input
 
 let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
 
+let cursorStyle = 'block'; // To track the current cursor style
+
 let activeGrepPattern = null;
 
 
@@ -629,6 +631,22 @@ const commands = {
   },
   cls: (args, options) => {
     clearOutput();
+  },
+  cursor: (args) => {
+    const supportedStyles = ['block', 'bar', 'underline'];
+    const style = args[0];
+
+    if (!style) {
+        return `Current cursor style: ${cursorStyle}. Supported: ${supportedStyles.join(', ')}.`;
+    }
+
+    if (supportedStyles.includes(style)) {
+        applyCursorStyle(style);
+        chrome.storage.sync.set({ cursorStyle: style }); // Save the setting
+        return `Cursor style set to ${style}.`;
+    } else {
+        return `Error: Style '${style}' not supported. Use one of: ${supportedStyles.join(', ')}`;
+    }
   },
   ls: (args, options, pipedInput) => {
     // 1. Handle -l (long format)
@@ -2290,7 +2308,7 @@ async function loadSettings() {
 
   // --- FIX ENDS HERE ---
 
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'cursorStyle']);
   
   // 3. Restore bookmark path
   if (data.bookmarkPath) {
@@ -2359,6 +2377,7 @@ async function loadSettings() {
   if (data.theme) {
     promptTheme = data.theme;
   }
+  
   if (data.imgAPI) {
     promptBgRandomAPI = data.imgAPI;
   }
@@ -2370,6 +2389,13 @@ async function loadSettings() {
     promptOpacity = data.background_opacity;
     applyTheme(promptTheme);
     applyBackground(null, promptOpacity); // Apply default background
+  }
+
+  //! Apply Cursor must be after applyTheme
+  if (data.cursorStyle) {
+    applyCursorStyle(data.cursorStyle);
+  } else {
+    applyCursorStyle('block'); // Apply default if nothing is saved
   }
 
   bgUploadInput.addEventListener('change', handleFileSelect);
@@ -3209,6 +3235,12 @@ function applyTheme(themeName) {
     document.body.className = `theme-${themeName}`;
     promptTheme = themeName;
     saveTheme();
+}
+
+function applyCursorStyle(style) {
+    document.body.classList.remove('cursor-style-block', 'cursor-style-bar', 'cursor-style-underline');
+    document.body.classList.add(`cursor-style-${style}`);
+    cursorStyle = style;
 }
 
 function saveTheme() {
