@@ -10,7 +10,7 @@ const editorView = document.getElementById("editor-view");
 const editorTitleInput = document.getElementById("editor-title");
 const editorUrlInput = document.getElementById("editor-url"); 
 const editorStatus = document.getElementById("editor-status"); 
-const supported_search_engine = ["google", "bing", "baidu"];
+// const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
@@ -34,13 +34,13 @@ let wgetJobs = {};
 const SUDO_REQUIRED_COMMANDS = ['rm', 'apt'];
 
 let default_mode = false;
-let default_search_engine = "google";
+// let default_search_engine = "google";
 
 let aliases = {};
 
 let user = ""
 
-const BROWSER_TYPE = detectBrowser();
+// const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
 let path = [];
@@ -76,160 +76,6 @@ function update_user_path() {
   promptSymbol.textContent = full_path;
 }
 
-// =================================================================
-// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
-// =================================================================
-async function loginWithMicrosoft() {
-    const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
-
-    // --- PKCE Help Function ---
-    // 1. 创建一个随机字符串作为 code_verifier
-    function generateCodeVerifier() {
-        const randomBytes = new Uint8Array(32);
-        crypto.getRandomValues(randomBytes);
-        return btoa(String.fromCharCode.apply(null, randomBytes))
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    }
-
-    // 2. 用 SHA-256 哈希 verifier 来创建 code_challenge
-    async function generateCodeChallenge(verifier) {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(verifier);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        return btoa(String.fromCharCode.apply(null, new Uint8Array(hashBuffer)))
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-    }
-    // --- PKCE Help Function ---
-
-
-    // 1. Generate PKCE code_verifier and code_challenge
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = await generateCodeChallenge(codeVerifier);
-
-
-    // 2. Construct Microsoft Authorization URL
-    const authUrl = new URL('https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
-    authUrl.searchParams.append('client_id', MS_CLIENT_ID);
-    authUrl.searchParams.append('response_type', 'code'); // <--- 关键变化
-    authUrl.searchParams.append('redirect_uri', chrome.identity.getRedirectURL());
-    authUrl.searchParams.append('scope', 'https://graph.microsoft.com/User.Read');
-    authUrl.searchParams.append('response_mode', 'query'); // <--- 推荐使用 'query'
-    // Add PKCE parameters
-    authUrl.searchParams.append('code_challenge', codeChallenge);
-    authUrl.searchParams.append('code_challenge_method', 'S256');
-
-    console.log("Opening URL:", authUrl.href);
-    print("Opening Microsoft login page...", "info");
-
-    // 3. Start Web Auth (code)
-    chrome.identity.launchWebAuthFlow({
-        url: authUrl.href,
-        interactive: true
-    }, (redirectUrl) => {
-        if (chrome.runtime.lastError || !redirectUrl) {
-            console.error("Auth Failed:", chrome.runtime.lastError?.message);
-            
-            print("Auth Failed: " + (chrome.runtime.lastError?.message || "Unknown Error"), "error");
-            print("");
-
-            done();
-            return;
-        }
-        
-        // 4. 从重定向URL中解析出 "code"
-        const url = new URL(redirectUrl);
-        const code = url.searchParams.get('code');
-
-        if (!code) {
-            // 这里处理 redirectUrl 中返回的错误信息
-            const error = url.searchParams.get('error_description') || "Failed to get code";
-            console.error("Failed to get code:", error);
-            print("Failed to get code: " + error, "error");
-            // 可以在此处向用户显示更友好的错误信息
-            if (error.includes("'token' is disabled")) {
-                console.error("Failed to login, please contact the developer.");
-                print("Failed to login, please contact the developer.", "error");
-            }
-            print("");
-            done();
-            return;
-        }
-
-        console.log("Successfully get code");
-        print("Successfully get code", "success");
-
-        // 5. Exchange to Access Token
-        const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-        const params = new URLSearchParams();
-        params.append('client_id', MS_CLIENT_ID);
-        params.append('scope', 'https://graph.microsoft.com/User.Read');
-        params.append('code', code);
-        params.append('redirect_uri', chrome.identity.getRedirectURL());
-        params.append('grant_type', 'authorization_code');
-        // Send verifier to verify
-        params.append('code_verifier', codeVerifier);
-
-        fetch(tokenUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: params
-        })
-        .then(response => response.json())
-        .then(tokenInfo => {
-            if (tokenInfo.error) {
-                console.error("Token Exchange Failed:", tokenInfo.error_description);
-                print("Token Exchange Failed: " + tokenInfo.error_description, "error");
-                print("");
-                done();
-                return Promise.reject(tokenInfo.error_description); // 中断链条
-            }
-            
-            const accessToken = tokenInfo.access_token;
-            console.log("Successfully get Access Token!");
-            print("Successfully get Access Token", "success");
-
-            // 6. 使用 Access Token 获取用户信息
-            return fetch('https://graph.microsoft.com/v1.0/me', {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            })
-            .then(response => response.json())
-            .then(userInfo => ({ userInfo, tokenInfo })); // 将两个结果一起向下传递
-        })
-        .then(({ userInfo, tokenInfo }) => { // 接收包含两个信息的对象
-            if (userInfo.error) {
-                console.error("Failed to get user info:", userInfo.error.message);
-                print("Failed to get user info: " + userInfo.error.message, "error");
-                return;
-            }
-
-            // --- 这是关键的保存逻辑 ---
-            const expirationTime = Date.now() + (tokenInfo.expires_in * 1000);
-            const msAuthData = { userInfo, tokenInfo, expirationTime };
-            chrome.storage.sync.set({ msAuth: msAuthData }, () => {
-              console.log('Microsoft auth data saved.');
-            });
-            // --- 保存逻辑结束 ---
-
-            const user_info = userInfo.userPrincipalName || userInfo.displayName;
-            print(`Welcome, ${user_info}`, "success");
-            user = user_info;
-            update_user_path();
-            print("");
-            done();
-        })
-        .catch(error => {
-            // 确保不会因为我们中断链条而报错
-            if (typeof error === 'string') return; 
-            
-            console.error("An Unknown Error occurred:", error);
-            print("An Unknown Error occurred: " + (error.message || error), "error");
-            print("");
-            done();
-        });
-    });
-}
-// 调用函数
-// loginWithMicrosoft();
 
 // Helper function to set caret position in contenteditable elements
 function setCaretAtOffset(element, offset) {
@@ -285,6 +131,73 @@ function setCaretAtOffset(element, offset) {
     if (document.activeElement !== element) {
         element.focus();
     }
+}
+
+// in script.js, add these two new functions
+
+function loginWithGoogle() {
+    // This uses Chrome's built-in Google auth helper, which is simpler than the manual flow.
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+        if (chrome.runtime.lastError || !token) {
+            print(`Google Auth Failed: ${chrome.runtime.lastError?.message || "User cancelled."}`, "error");
+            print("");
+            done();
+            commanding = false;
+            return;
+        }
+
+        // Use the token to get user info
+        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(response => response.json())
+        .then(userInfo => {
+            if (userInfo.error) {
+                throw new Error(userInfo.error.message);
+            }
+
+            const gAuthData = { userInfo, token }; // Store user info and token
+            chrome.storage.sync.set({ gAuth: gAuthData, activeLogin: 'google' });
+            
+            user = userInfo.email || userInfo.name;
+            print(`Welcome, ${user}`, "success");
+            update_user_path();
+            print("");
+            done();
+        })
+        .catch(error => {
+            print(`Failed to get user info: ${error.message}`, "error");
+            print("");
+            done();
+        });
+        commanding = false;
+    });
+    
+}
+
+function logoutWithGoogle() {
+    chrome.storage.sync.get('gAuth', (data) => {
+        if (data.gAuth && data.gAuth.token) {
+            const token = data.gAuth.token;
+            // 1. Revoke the token to invalidate it on Google's side
+            fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
+            
+            // 2. Remove the token from Chrome's local cache
+            chrome.identity.removeCachedAuthToken({ token: token });
+        }
+
+        // 3. Clear our stored data
+        chrome.storage.sync.remove(['gAuth', 'activeLogin'], () => {
+            user = "";
+            update_user_path();
+            print("Logged out from Google.", "success");
+            print("");
+            
+        });
+        
+    });
+    commanding = false;
+    
 }
 
 
@@ -347,6 +260,7 @@ const manPages = {
   "find": "NAME\n  find - search for files in a directory hierarchy\n\nSYNOPSIS\n  find [path] -name <pattern>\n\nDESCRIPTION\n  Searches for bookmarks/folders matching the <pattern> within the given [path] or current directory.\n  The pattern can include a wildcard '*' (e.g., 'find -name \"*search*\").",
   "history": "NAME\n  history - display command history\n\nSYNOPSIS\n  history\n\nDESCRIPTION\n  Displays the list of previously executed commands.",
   "alias": "NAME\n  alias - create a shortcut for a command\n\nSYNOPSIS\n  alias\n  alias <name>='<command>'\n\nDESCRIPTION\n  'alias' with no arguments prints the list of aliases.\n  'alias name='command'' defines an alias 'name' for 'command'. Quotes are important for commands with spaces.",
+  "unalias": "NAME\n  unalias - remove aliases\n\nSYNOPSIS\n  unalias <alias_name>\n\nDESCRIPTION\n  Removes the alias specified by <alias_name> from the list of defined aliases. This change is saved and will persist across sessions.",
   "touch": "NAME\n  touch - create a new, empty bookmark\n\nSYNOPSIS\n  touch <filename>\n\nDESCRIPTION\n  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.",
   "man": "NAME\n  man - format and display the on-line manual pages\n\nSYNOPSIS\n  man <command>\n\nDESCRIPTION\n  Displays the manual page for a given command.",
   "clear": "NAME\n  clear, cls - clear the terminal screen\n\nSYNOPSIS\n  clear\n  cls\n\nDESCRIPTION\n  Clears all previous output from the terminal screen.",
@@ -358,6 +272,10 @@ const manPages = {
   "wget": "NAME\n  wget - download a file\n\nSYNOPSIS\n  wget <url>\n\nDESCRIPTION\n  Initiates a download for the given <url> and displays a progress bar.",
   "grep": "NAME\n  grep - filter input\n\nSYNOPSIS\n  <command> | grep <pattern>\n\nDESCRIPTION\n  Filters the output of another command, showing only the lines that contain the specified <pattern>. It is case-insensitive.\n  Example: `history | grep ls`",
   "unset": "NAME\n  unset - unset environment variables\n\nSYNOPSIS\n  unset <name>\n\nDESCRIPTION\n  Removes the environment variable specified by <name>. This action is permanent for the current and future sessions.",
+  "default": "NAME\n  default - toggle the default action for unknown commands\n\nSYNOPSIS\n  default [on | off]\n\nDESCRIPTION\n  Controls the terminal's behavior when an unrecognized command is entered. Running `default` with no arguments will display the current mode.\n\n  on\tWhen this mode is enabled, any text that is not a valid command will be automatically treated as a web search query. This provides convenience by allowing you to search without typing the 'search' command first.\n\n  off\tThis is the standard mode. Unknown commands will result in an 'Unknown command' error, requiring you to explicitly use the 'search' command for web queries.\n\nEXAMPLES\n  default on\n  > cats and dogs  (This will now perform a search)\n\n  default off\n  > cats and dogs  (This will now produce an error)",
+  "search": "NAME\n  search - perform a web search\n\nSYNOPSIS\n  search [-b] <query>\n\nDESCRIPTION\n  Performs a search using the user's default search engine configured in the browser's main settings. This is the primary and policy-compliant way to search the web from the terminal.\n\nOPTIONS\n  -b\tOpens the search results in a new background tab, allowing you to continue working in the terminal.",
+  "glogin": "NAME\n  glogin - log in with a Google account\n\nSYNOPSIS\n  glogin\n\nDESCRIPTION\n  Initiates the Google OAuth 2.0 flow to securely log you in. Your email address will be displayed in the prompt.",
+  "glogout": "NAME\n  glogout - log out from your Google account\n\nSYNOPSIS\n  glogout\n\nDESCRIPTION\n  Logs you out from your Google account, revokes the authentication token, and clears stored credentials.",
 };
 
 const previousCommands = [];
@@ -471,39 +389,39 @@ function findChildByTitleFileOrDir(children, title) { // For general lookup (fil
 
 
 const commands = {
-  google: (args, options) => {
-    if (args.length === 0) return "Usage: google <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-    return true;
-  },
-  bing: (args, options) => {
-    if (args.length === 0) return "Usage: bing <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-    return true;
-  },
-  baidu: (args, options) => {
-    if (args.length === 0) return "Usage: baidu <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
-    return true;
-  },
+  // google: (args, options) => {
+  //   if (args.length === 0) return "Usage: google <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // bing: (args, options) => {
+  //   if (args.length === 0) return "Usage: bing <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // baidu: (args, options) => {
+  //   if (args.length === 0) return "Usage: baidu <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
   goto: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: goto <url> [-b]";
@@ -531,39 +449,53 @@ const commands = {
     location.href = url;
     return true;
   },
-  youtube: (args, options) => {
-    if (args.length === 0) return "Usage: youtube <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
-      return true;
+  search: (args, options) => {
+    if (args.length === 0) {
+        return "Usage: search [-b] <query>";
     }
-    location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-    return true;
-  },
-  bilibili: (args, options) => {
-    if (args.length === 0) return "Usage: bilibili <query> [-b]";
     const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
-    return true;
+
+    // Uses the official Chrome Search API.
+    // This will automatically use the user's default search engine set in Chrome settings.
+    chrome.search.query({
+        text: query,
+        // If -b option is used, open in a new tab, otherwise search in the current tab.
+        disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" 
+    });
   },
-  spotify: (args, options) => {
-    if (args.length === 0) return "Usage: spotify <query> [-b]";
-    const query = args.join(" ");
-    if (options.b) {
-      // If -b option is used, open in a new tab
-      window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
-      return true;
-    }
-    location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
-    return true;
-  },
+  // youtube: (args, options) => {
+  //   if (args.length === 0) return "Usage: youtube <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // bilibili: (args, options) => {
+  //   if (args.length === 0) return "Usage: bilibili <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
+  //   return true;
+  // },
+  // spotify: (args, options) => {
+  //   if (args.length === 0) return "Usage: spotify <query> [-b]";
+  //   const query = args.join(" ");
+  //   if (options.b) {
+  //     // If -b option is used, open in a new tab
+  //     window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
+  //     return true;
+  //   }
+  //   location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
+  //   return true;
+  // },
   ping: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: ping <host> [-t] [-n <count>]";
@@ -935,7 +867,7 @@ const commands = {
   default: (args, options) => {
     // Change the default search engine
     if (args.length === 0) {
-      print(`Current default search engine is ${default_search_engine}`, "highlight");
+      // print(`Current default search engine is ${default_search_engine}`, "highlight");
       print(`Current default mode is ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
       return "Usage: default <search engine> (google, bing, baidu)";
     }
@@ -949,26 +881,40 @@ const commands = {
       print("Default mode is off. ", "success");
       print("To turn it on, type 'default on'");
     }
-    else if (supported_search_engine.includes(arg)){
-      default_search_engine = arg;
-      if (!default_mode) {
-        print(`Successfully changed default search engine to ${arg}`);
-        print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
-      }
-    }
-    else {
-      print(`Unable to change default search engine: ${arg} is not supported.`, "error");
-    }
+    // else if (supported_search_engine.includes(arg)){
+    //   default_search_engine = arg;
+    //   if (!default_mode) {
+    //     print(`Successfully changed default search engine to ${arg}`);
+    //     print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
+    //   }
+    // }
+    // else {
+    //   print(`Unable to change default search engine: ${arg} is not supported.`, "error");
+    // }
     saveDefaultSettings();
 
   },
-  mslogin: () => {
-    print("Logging in with Microsoft");
+  
+  // mslogin: () => {
+  //   print("Logging in with Microsoft");
+  //   awaiting();
+  //   commanding = true;
+  //   loginWithMicrosoft();
+  // },
+  // mslogout: () => {
+  //   logoutWithMicrosoft();
+  // },
+  glogin: () => {
+    print("Logging in with Google");
     awaiting();
-    loginWithMicrosoft();
+    commanding = true;
+    loginWithGoogle();
   },
-  mslogout: () => {
-    logoutWithMicrosoft();
+  glogout: () => {
+    print("Logging out from Google"); 
+    awaiting();
+    commanding = true;
+    logoutWithGoogle();
   },
   apt: (args) => {
     if (args.length === 0) {
@@ -977,9 +923,11 @@ const commands = {
     let arg = args[0];
     if (arg == "update") {
       awaiting();
+      commanding = true;
       checkForUpdates();
     } else if (arg == "upgrade") {
       awaiting();
+      commanding = true;
       applyUpdates();
     }
   },
@@ -990,9 +938,11 @@ const commands = {
     let arg = args[0];
     if (arg == "update") {
       awaiting();
+      commanding = true;
       checkForUpdates();
     } else if (arg == "upgrade") {
       awaiting();
+      commanding = true;
       applyUpdates();
     }
   },
@@ -1189,6 +1139,21 @@ const commands = {
       chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
       return `Alias '${name}' set.`;
   },
+
+  unalias: (args) => {
+      if (args.length === 0) {
+          return "Usage: unalias <alias_name>";
+      }
+      const aliasName = args[0];
+
+      if (aliases.hasOwnProperty(aliasName)) {
+          delete aliases[aliasName]; // Remove the alias from our object
+          chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          return `Alias removed: ${aliasName}`;
+      } else {
+          return `unalias: no such alias: ${aliasName}`;
+      }
+  },
   
   man: (args, options) => {
       if (args.length === 0) {
@@ -1374,12 +1339,13 @@ const commands = {
     print("");
 
     print("Search Commands", "highlight");
-    print("  google <query> [-b]   - Search with Google.");
-    print("  bing <query> [-b]     - Search with Bing.");
-    print("  baidu <query> [-b]    - Search with Baidu.");
-    print("  yt <query> [-b]       - Search with YouTube.");
-    print("  bilibili <query> [-b] - Search with Bilibili.");
-    print("  spotify <query> [-b]  - Search with Spotify.");
+    // print("  google <query> [-b]   - Search with Google.");
+    // print("  bing <query> [-b]     - Search with Bing.");
+    // print("  baidu <query> [-b]    - Search with Baidu.");
+    // print("  yt <query> [-b]       - Search with YouTube.");
+    // print("  bilibili <query> [-b] - Search with Bilibili.");
+    // print("  spotify <query> [-b]  - Search with Spotify.");
+    print("  search <query> [-b]   - Search using your browser's default engine.");
     print("");
     
     print("Navigation & Bookmarks", "highlight");
@@ -1420,10 +1386,12 @@ const commands = {
     print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
     print("  history               - Show command history.");
     print("  alias [name='cmd']    - Create or list command aliases.");
+    print("  unalias <name>        - Remove an alias.");
     print("");
     
     print("Account & Customization", "highlight");
-    print("  mslogin / mslogout    - Log in/out with a Microsoft account.");
+    print("  glogin                - Log in with your Google account.");
+    print("  glogout               - Log out from your Google account.");
     print("  theme <name>          - Change terminal theme.");
     print("  uploadbg / setbg      - Manage custom background.");
     print("  man <command>         - Show the manual page for a command.");
@@ -1513,15 +1481,15 @@ function parseCommandLine(input) {
   return { command, args, options };
 }
 
-function logoutWithMicrosoft() {
-  chrome.storage.sync.remove('msAuth', () => {
-      user = "";
-      update_user_path();
-      print("Logged out from Microsoft.", "success");
-      print("");
-      done();
-    });
-  }
+// function logoutWithMicrosoft() {
+//   chrome.storage.sync.remove('msAuth', () => {
+//       user = "";
+//       update_user_path();
+//       print("Logged out from Microsoft.", "success");
+//       print("");
+//       done();
+//     });
+//   }
 
 // Add this helper function somewhere in your script.
 function displayTree(node, prefix = '', isLast = true) {
@@ -1907,7 +1875,10 @@ async function executePipeline(pipelineStr) {
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    // ... (default mode logic) ...
+                    const query = finalCommand; // The entire unrecognized input is the query
+                    const disposition = options.b ? "NEW_TAB" : "CURRENT_TAB";
+                    
+                    chrome.search.query({ text: query, disposition: disposition });
                 } else {
                     print(`Unknown command: '${command}'`, "error");
                 }
@@ -2068,7 +2039,7 @@ function done() {
 // SETTINGS 
 function saveDefaultSettings() {
   const settings = {
-    default_search_engine: default_search_engine,
+    // default_search_engine: default_search_engine,
     default_mode: default_mode,
   };
   chrome.storage.sync.set({ settings });
@@ -2142,7 +2113,7 @@ async function loadSettings() {
   root = bookmarkTree[0];
   current = root; // 默认在根目录
   path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
+  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'gAuth', 'activeLogin']);
 // 3. 恢复书签路径
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
@@ -2175,7 +2146,7 @@ async function loadSettings() {
     
   if (data.settings) {
     default_mode = data.settings.default_mode ?? false;
-    default_search_engine = data.settings.default_search_engine ?? "google";
+    // default_search_engine = data.settings.default_search_engine ?? "google";
   }
 
   if (data.commandHistory) {
@@ -2186,18 +2157,9 @@ async function loadSettings() {
     environmentVars = data.environmentVars;
   }
 
-  if (data.msAuth && data.msAuth.tokenInfo) {
-    let currentAuth = data.msAuth;
-    if (Date.now() > currentAuth.expirationTime) {
-      // Token 过期，尝试刷新
-      currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
-    }
-
-    if (currentAuth) {
-      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
-      user = user_info;
-      print(`Welcome back, ${user_info}`, "success");
-    }
+  if (data.activeLogin === 'google' && data.gAuth && data.gAuth.userInfo) {
+      user = data.gAuth.userInfo.email || data.gAuth.userInfo.name;
+      print(`Welcome back, ${user}`, "success");
   }
 
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
@@ -2436,7 +2398,7 @@ document.body.addEventListener("keydown", async e => {
 
   if (e.key.toLowerCase() === "d" && control_cmd) {
     e.preventDefault();
-    logoutWithMicrosoft();
+    logoutWithGoogle();
     return;
   }
   
@@ -2891,11 +2853,11 @@ function welcomeMsg() {
     print("");
     print("Type 'help' for a list of commands.");
     print("");
-    print("Default Search Engine:");
-    print(`  - Current: ${default_search_engine}`, "highlight");
-    print(`  - Current default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
-    print("  - Supported: google, bing, baidu");
-    print("  - Change with: default <search engine|on|off>", "hint");
+    // print("Search By Default:");
+    // print(`  - Current: ${default_search_engine}`, "highlight");
+    print(`Search by default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
+    // print("  - Supported: google, bing, baidu");
+    // print("  - Change with: default <search engine|on|off>", "hint");
     print("");
 }
 
@@ -2988,6 +2950,7 @@ function checkForUpdates() {
     print("Check Failed: This is expected if the extension is not installed from the store.", "error");
     done();
   }
+  commanding = false;
 }
 
 async function applyUpdates() {
@@ -3002,8 +2965,7 @@ async function applyUpdates() {
     print("Abort")
   }
   done();
-  
-
+  commanding = false;
 }
 
 function userInputMode(query) {

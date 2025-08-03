@@ -27,6 +27,11 @@ let activeGrepPattern = null;
 
 let isEditing = false; 
 let editingBookmarkId = null; 
+
+let activeEditor = null;
+let unsavedChanges = false;
+let vimMode = 'NORMAL';
+
 let outputHistory = [];
 
 let environmentVars = {};
@@ -1178,32 +1183,10 @@ const commands = {
       });
   },
   nano: (args) => {
-    if (args.length === 0) {
-      return "Usage: nano <bookmark_name>";
-    }
-    const bookmarkName = args.join(' ');
-    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
-    if (!target) {
-      return `nano: '${bookmarkName}': No such file or bookmark.`;
-    }
-    if (target.children) {
-      return `nano: '${bookmarkName}': Is a directory.`;
-    }
-
-    // Enter editing mode
-    isEditing = true;
-    editingBookmarkId = target.id;
-
-    // Populate the editor fields
-    editorTitleInput.value = target.title;
-    editorUrlInput.value = target.url;
-    editorStatus.textContent = `Editing: ${target.title}`;
-
-    // Switch views
-    terminal.style.display = "none";
-    editorView.style.display = "flex";
-    editorTitleInput.focus();
+    setupNanoEditor(args);
+  },
+  vim: (args) => {
+    setupVimEditor(args);
   },
   export: (args) => {
     if (args.length === 0) {
@@ -1447,8 +1430,88 @@ function findNodeByPath(pathStr) {
 }
 
 
-// Alias 
-// commands.yt = commands.youtube;
+function setupNanoEditor(args) {
+    if (args.length === 0) return "Usage: nano <bookmark_name>";
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) return `nano: '${bookmarkName}': No such file.`;
+    if (target.children) return `nano: '${bookmarkName}': Is a directory.`;
+
+    isEditing = true;
+    activeEditor = 'nano';
+    editingBookmarkId = target.id;
+    unsavedChanges = false;
+
+    // Show nano fields, hide vim textarea
+    document.getElementById('nano-fields').style.display = 'block';
+    document.getElementById('editor-textarea').style.display = 'none';
+    
+    editorTitleInput.value = target.title;
+    editorUrlInput.value = target.url;
+    editorStatus.textContent = `Editing: ${target.title}`;
+    document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save &nbsp;&nbsp; <span class="editor-shortcut">^X</span> Exit`;
+    
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+    editorTitleInput.focus();
+}
+
+function setupVimEditor(args) {
+    if (args.length === 0) return "Usage: vim <bookmark_name>";
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) return `vim: '${bookmarkName}': No such file.`;
+    
+    isEditing = true;
+    activeEditor = 'vim';
+    editingBookmarkId = target.id;
+    unsavedChanges = false;
+    vimMode = 'NORMAL';
+    
+    document.getElementById('nano-fields').style.display = 'none';
+    const textarea = document.getElementById('editor-textarea');
+    textarea.style.display = 'block';
+    textarea.readOnly = true;
+
+    // ★★★ THE FIX: Use the full bookmark object to display ALL properties ★★★
+    // We use JSON.parse(JSON.stringify(...)) to get a clean, serializable copy of the object.
+    const fullBookmarkData = JSON.parse(JSON.stringify(target));
+    
+    // We can optionally remove properties the user should never edit
+    delete fullBookmarkData.children; // Never edit children array directly
+
+    textarea.value = JSON.stringify(fullBookmarkData, null, 2);
+
+    editorStatus.textContent = `Editing: ${target.title}`;
+    document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+    setTimeout(() => textarea.focus(), 0);
+
+    textarea.oninput = () => { unsavedChanges = true; };
+}
+
+function exitEditor() {
+    if (unsavedChanges) {
+        editorStatus.textContent = "Warning: Unsaved changes detected! Press ^X again to discard and exit.";
+        // We add a temporary flag to allow exiting on the second try
+        window.forceExit = true;
+        setTimeout(() => { window.forceExit = false; }, 3000); // Flag resets after 3s
+        return;
+    }
+
+    isEditing = false;
+    editingBookmarkId = null;
+    unsavedChanges = false;
+    window.forceExit = false;
+
+    editorView.style.display = "none";
+    terminal.style.display = "block";
+    done();
+}
 
 function parseCommandLine(input) {
   const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map(t => t.replace(/^"|"$/g, "")) || [];
@@ -2221,42 +2284,142 @@ function clearSuggestions() {
 document.body.addEventListener("keydown", async e => {
 
   if (isEditing) {
-    // Save: Ctrl+S or Cmd+S
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      const newTitle = editorTitleInput.value;
-      const newUrl = editorUrlInput.value;
-
-      editorStatus.textContent = "Saving...";
-      chrome.bookmarks.update(editingBookmarkId, { title: newTitle, url: newUrl }, (updatedNode) => {
-        if (chrome.runtime.lastError) {
-          editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
-        } else {
-          editorStatus.textContent = `Saved: ${updatedNode.title}`;
-          // Refresh current directory silently in the background
-          chrome.bookmarks.getSubTree(current.id, (results) => {
-              if (results && results[0]) {
-                current = results[0];
-                path[path.length - 1] = current;
-              }
-          });
+    // --- NANO MODE LOGIC ---
+    if (activeEditor === 'nano') {
+        // For nano, we only intercept our specific shortcuts.
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            // ★★★ NANO SAVE LOGIC - FIXED ★★★
+            editorStatus.textContent = "Saving...";
+            const updatePayload = {
+                title: editorTitleInput.value,
+                url: editorUrlInput.value
+            };
+            chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
+                if (chrome.runtime.lastError) {
+                    editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+                } else {
+                    editorStatus.textContent = `Saved: ${updatedNode.title}`;
+                    unsavedChanges = false;
+                    // Silently refresh the current directory's children
+                    chrome.bookmarks.getSubTree(current.id, (results) => {
+                        if (results && results[0]) current = results[0];
+                    });
+                }
+            });
+        } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+            e.preventDefault();
+            exitEditor();
         }
-      });
+        // For all other keys, we do NOT call preventDefault and do NOT return.
+        // This allows the browser to handle typing and cursor movement normally.
+        return;
     }
 
-    // Exit: Ctrl+X
-    if (e.ctrlKey && e.key.toLowerCase() === 'x') {
-      e.preventDefault();
-      // Exit editing mode
-      isEditing = false;
-      editingBookmarkId = null;
+    // --- VIM MODE LOGIC ---
+    if (activeEditor === 'vim') {
+        const textarea = document.getElementById('editor-textarea');
+        const commandLine = document.getElementById('editor-command-line');
+        const commandLineInput = document.getElementById('editor-command-line-input');
 
-      // Switch views back
-      editorView.style.display = "none";
-      terminal.style.display = "block";
-      done();
+        // -- INSERT MODE --
+        if (vimMode === 'INSERT') {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                vimMode = 'NORMAL';
+                textarea.readOnly = true;
+                document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+                textarea.focus();
+            }
+            // For any other key in INSERT mode, we do nothing and let the browser handle it.
+            // This allows typing, arrow keys, backspace, etc. to work naturally.
+            return;
+        }
+
+        // For NORMAL and COMMAND mode, we control everything.
+        e.preventDefault();
+
+        // -- COMMAND MODE --
+        if (vimMode === 'COMMAND') {
+            if (e.key === 'Escape') {
+                vimMode = 'NORMAL';
+                commandLine.style.display = 'none';
+                commandLineInput.textContent = '';
+                textarea.focus();
+                document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+            } else if (e.key === 'Enter') {
+                const command = commandLineInput.textContent.trim().substring(1);
+                // (Your existing :w, :q, :wq, :q! logic is mostly correct and can be placed here)
+                // Let's ensure the save logic is complete:
+                if (command === 'w' || command === 'wq') {
+                    editorStatus.textContent = "Saving...";
+                    try {
+                        const newData = JSON.parse(textarea.value);
+                        const updatePayload = {
+                            ...(newData.title !== undefined && { title: newData.title }),
+                            ...(newData.url !== undefined && { url: newData.url })
+                        };
+                        chrome.bookmarks.update(editingBookmarkId, updatePayload, (node) => {
+                            if (chrome.runtime.lastError) {
+                                editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+                            } else {
+                                editorStatus.textContent = `Saved: ${node.title}`;
+                                unsavedChanges = false;
+                                if (command === 'wq') exitEditor();
+                            }
+                        });
+                    } catch (err) { editorStatus.textContent = `Error: Invalid JSON! ${err.message}`; }
+                } else if (command === 'q') {
+                    if (unsavedChanges) {
+                        editorStatus.textContent = "Unsaved changes! Use ':q!' to discard.";
+                    } else {
+                        exitEditor();
+                    }
+                } else if (command === 'q!') {
+                    unsavedChanges = false;
+                    exitEditor();
+                }
+                // Exit command mode after execution
+                if (command !== 'q' || !unsavedChanges) {
+                    vimMode = 'NORMAL';
+                    commandLine.style.display = 'none';
+                    commandLineInput.textContent = '';
+                    textarea.focus();
+                    document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+                }
+            } else if (e.key === 'Backspace') {
+                if (commandLineInput.textContent.length > 1) {
+                    commandLineInput.textContent = commandLineInput.textContent.slice(0, -1);
+                }
+            } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+                commandLineInput.textContent += e.key;
+            }
+            return;
+        }
+
+        // -- NORMAL MODE --
+        if (vimMode === 'NORMAL') {
+            if (e.key === 'i') {
+                vimMode = 'INSERT';
+                textarea.readOnly = false;
+                document.getElementById('editor-footer').innerHTML = `<span style="background-color: #8ae234; color: #000;">-- INSERT --</span>`;
+                setTimeout(() => textarea.focus(), 0);
+            } else if (e.key === ':') {
+                vimMode = 'COMMAND';
+                commandLine.style.display = 'block';
+                commandLineInput.textContent = ':';
+                commandLineInput.focus();
+                // Logic to set cursor to end
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(commandLineInput);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
     }
-    return; // Stop further processing in editing mode
+    return; 
   }
 
 
@@ -2398,7 +2561,7 @@ document.body.addEventListener("keydown", async e => {
 
   if (e.key.toLowerCase() === "d" && control_cmd) {
     e.preventDefault();
-    logoutWithGoogle();
+    logoutWithMicrosoft();
     return;
   }
   
@@ -2409,7 +2572,7 @@ document.body.addEventListener("keydown", async e => {
     // --- FIX: Define command categories for smarter filtering ---
     const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
     // For file-only commands, we add a special "./" type for executable bookmarks
-    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./"];
+    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./", "vim"]; // "./" is a special type for executable bookmarks
     // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
 
     const relevantInput = buffer.substring(0, cursorPosition);

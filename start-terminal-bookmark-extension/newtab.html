@@ -24,18 +24,26 @@
     </div>
   <div id="autocomplete-suggestions"></div>
   </div>
-  </div> <div id="editor-view" style="display: none;">
-    <div class="editor-field">
-      <label for="editor-title">Title:</label>
-      <input type="text" id="editor-title" name="title" autocomplete="off">
+  <div id="editor-view" style="display: none;">
+  
+    <textarea id="editor-textarea" spellcheck="false"></textarea>
+
+    <div id="nano-fields">
+      <div class="editor-field">
+        <label for="editor-title">Title:</label>
+        <input type="text" id="editor-title" name="title" autocomplete="off">
+      </div>
+      <div class="editor-field">
+        <label for="editor-url">URL:</label>
+        <input type="text" id="editor-url" name="url" autocomplete="off">
+      </div>
     </div>
-    <div class="editor-field">
-      <label for="editor-url">URL:</label>
-      <input type="text" id="editor-url" name="url" autocomplete="off">
+
+    <div id="editor-command-line" style="display: none;">
+        <span id="editor-command-line-input" contenteditable="true" spellcheck="false"></span>
     </div>
-    <div id="editor-footer">
-      <span class="editor-shortcut">^S</span> Save &nbsp;&nbsp; <span class="editor-shortcut">^X</span> Exit
-    </div>
+
+    <div id="editor-footer"></div>
     <div id="editor-status"></div>
   </div>
   <input type="file" id="bg-upload-input" accept="image/*" style="display: none;">
