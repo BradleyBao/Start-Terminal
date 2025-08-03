@@ -22,6 +22,8 @@ let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
 
+let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
+
 let activeGrepPattern = null;
 
 
@@ -49,6 +51,7 @@ const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
 let path = [];
+let homeDirNode = null;
 
 let full_path = null;
 
@@ -72,11 +75,29 @@ function get_fav(bookmarks) {
 };
 
 function update_user_path() {
+  let displayPath;
+
+  // This first part, for handling paths inside the home directory, is correct.
+  if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+    if (path.length === 2) {
+      displayPath = "~";
+    } else {
+      displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
+    }
+  } else {
+    // --- THIS IS THE FIX ---
+    // For all other paths, build them from the root '/'
+    // We slice from 1 to ignore the main root node, which has no title.
+    const pathString = path.slice(1).map(p => p.title).join("/");
+    displayPath = "/" + pathString;
+  }
+
+  // The rest of the function remains the same.
   full_path = user;
   if (user !== "") {
     full_path += ": ";
   }
-  full_path += path.map(p => p.title || "~").join("/") || "/";
+  full_path += displayPath;
   full_path +=  " $";
   promptSymbol.textContent = full_path;
 }
@@ -1445,24 +1466,31 @@ const commands = {
  * @returns {{node: object, newPathArray: array}|null} The found node and its full path array, or null if not found.
  */
 function findNodeByPath(pathStr) {
-
+    // Handle home directory shortcut '~'
     if (pathStr === '~') {
-        return { node: root, newPathArray: [root] };
-    }
-
-    let startNode = current;
-    let pathSegments = pathStr.split('/').filter(s => s.length > 0);
-    let newPathArray = [...path]; // Start with a copy of the current path for relative search
-
-    // Check for absolute path
-    if (pathStr.startsWith('/') || pathStr.startsWith('~/')) {
-        startNode = root;
-        newPathArray = [root];
+        return { node: homeDirNode, newPathArray: [root, homeDirNode] };
     }
     
-    // If the path was just "/" or "~/", return the root
-    if (pathSegments.length === 0 && (pathStr.startsWith('/') || pathStr.startsWith('~/'))) {
-        return { node: root, newPathArray: [root] };
+    let startNode;
+    let newPathArray;
+    let pathSegments;
+
+    if (pathStr.startsWith('~/')) {
+        startNode = homeDirNode;
+        newPathArray = [root, homeDirNode];
+        pathSegments = pathStr.substring(2).split('/').filter(s => s.length > 0);
+    } else if (pathStr.startsWith('/')) {
+        startNode = root;
+        newPathArray = [root];
+        pathSegments = pathStr.substring(1).split('/').filter(s => s.length > 0);
+    } else {
+        startNode = current;
+        newPathArray = [...path];
+        pathSegments = pathStr.split('/').filter(s => s.length > 0);
+    }
+    
+    if (pathSegments.length === 0) {
+        return { node: startNode, newPathArray: newPathArray };
     }
 
     let currentNode = startNode;
@@ -1470,6 +1498,16 @@ function findNodeByPath(pathStr) {
         if (!currentNode.children) {
             return null; // Cannot traverse further
         }
+        
+        // Handle ".." to go to the parent directory
+        if (segment === '..') {
+            if (newPathArray.length > 1) {
+                newPathArray.pop();
+                currentNode = newPathArray[newPathArray.length - 1];
+            }
+            continue;
+        }
+
         const foundNode = currentNode.children.find(child => child.title === segment && child.children);
         
         if (foundNode) {
@@ -2228,28 +2266,48 @@ function showPrivacyUpdateNotice() {
 
 // Load all settings 
 async function loadSettings() {
-  // 1. 异步获取完整的书签树
+  // 1. Get the complete bookmark tree asynchronously
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
-  root = bookmarkTree[0];
-  current = root; // 默认在根目录
-  path = [root];  // 默认路径
+  const trueRoot = bookmarkTree[0];
+  
+  // --- FIX STARTS HERE ---
+  
+  // Correctly assign the fetched bookmark tree to the global 'root' variable
+  root = trueRoot; 
+
+  // Set the home directory '~' to be the "Favorites bar"
+  if (trueRoot.children && trueRoot.children.length > 0) {
+    homeDirNode = trueRoot.children[0];
+  } else {
+    // Fallback: if there are no children, home is the same as the root.
+    homeDirNode = root; 
+  }
+
+  // Set the starting location to the home directory.
+  current = homeDirNode;
+  // The path must reflect the full hierarchy, starting from the now-defined 'root'.
+  path = [root, homeDirNode];
+
+  // --- FIX ENDS HERE ---
+
   const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
-// 3. 恢复书签路径
+  
+  // 3. Restore bookmark path
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
-    let tempCurrent = root;
+    let tempCurrent = root; // Start from the valid root
     let tempPath = [root];
 
-    // 从根目录开始，根据ID逐级向下查找，重建路径
+    // Starting from the root, find each child by its ID to rebuild the path
     for (let i = 1; i < data.bookmarkPath.length; i++) {
       const nextId = data.bookmarkPath[i];
       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
 
-      if (nextNode && nextNode.children) { // 确保路径中的节点仍然存在且是文件夹
+      if (nextNode && nextNode.children) { // Ensure the node still exists and is a folder
         tempCurrent = nextNode;
         tempPath.push(nextNode);
       } else {
-        restoredPathIsValid = false; // 如果路径中某个文件夹被删了，则恢复失败
+        restoredPathIsValid = false; // If a folder in the path was deleted, restoration fails
         break;
       }
     }
@@ -2280,7 +2338,7 @@ async function loadSettings() {
   if (data.msAuth && data.msAuth.tokenInfo) {
     let currentAuth = data.msAuth;
     if (Date.now() > currentAuth.expirationTime) {
-      // Token 过期，尝试刷新
+      // Token has expired, try to refresh it
       currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
     }
 
@@ -2292,7 +2350,7 @@ async function loadSettings() {
   }
 
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
-    // 如果隐私政策版本不匹配，显示提示并更新版本
+    // If the privacy policy version does not match, show a notice
     setTimeout(() => showPrivacyUpdateNotice(), 100);
   }
 
@@ -2301,13 +2359,10 @@ async function loadSettings() {
   if (data.theme) {
     promptTheme = data.theme;
   }
-  console.log(data.imgAPI);
   if (data.imgAPI) {
     promptBgRandomAPI = data.imgAPI;
-    console.log("Background image API set to:", promptBgRandomAPI);
   }
   if (localData.customBackground) {
-    // promptBg = localData.customBackground;
     promptOpacity = data.background_opacity;
     applyTheme(data.theme);
     applyBackground(localData.customBackground, data.background_opacity);
@@ -2346,6 +2401,7 @@ function clearSuggestions() {
   suggestionsContainer.style.display = "none";
 }
 
+// --- Keyboard Listeners ---
 // --- Keyboard Listeners ---
 document.body.addEventListener("keydown", async e => {
 
@@ -2528,23 +2584,123 @@ document.body.addEventListener("keydown", async e => {
   }
 
   if (commanding) { // If a command is running
-    if (control_cmd && e.key.toLowerCase() === "c") {
+    if (e.ctrlKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         interrupt();
-    } else if (e.key !== "Control" && e.key !== "Meta") { // Allow modifier keys
-        // e.preventDefault(); // Optionally prevent other input during command execution
     }
     return; // Most keys ignored during command execution
   }
+  
+  // --- NEW EMACS-STYLE SHORTCUTS ---
+  if (e.ctrlKey && !e.altKey && !e.shiftKey) {
+    // console.log("Key pressed:", e.key);
+      switch (e.key.toLowerCase()) {
+          case 'a': // Move to beginning of line
+              e.preventDefault();
+              cursorPosition = 0;
+              updateInputDisplay();
+              return;
+          case 'e': // Move to end of line
+              e.preventDefault();
+              cursorPosition = buffer.length;
+              updateInputDisplay();
+              return;
+          case 'u': // Delete from cursor to start of line
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  yankBuffer = buffer.substring(0, cursorPosition);
+                  buffer = buffer.substring(cursorPosition);
+                  cursorPosition = 0;
+                  updateInputDisplay();
+              }
+              return;
+          case 'k': // Delete from cursor to end of line
+              e.preventDefault();
+              yankBuffer = buffer.substring(cursorPosition);
+              buffer = buffer.substring(0, cursorPosition);
+              updateInputDisplay();
+              return;
+          case 'w': // Delete word before cursor
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  const originalCursorPos = cursorPosition;
+                  let endOfWord = cursorPosition;
+                  while (endOfWord > 0 && buffer[endOfWord - 1] === ' ') {
+                      endOfWord--;
+                  }
+                  let startOfWord = endOfWord;
+                  while (startOfWord > 0 && buffer[startOfWord - 1] !== ' ') {
+                      startOfWord--;
+                  }
+                  yankBuffer = buffer.substring(startOfWord, originalCursorPos);
+                  buffer = buffer.substring(0, startOfWord) + buffer.substring(originalCursorPos);
+                  cursorPosition = startOfWord;
+                  updateInputDisplay();
+              }
+              return;
+          case 'y': // Paste (yank)
+              e.preventDefault();
+              if (yankBuffer) {
+                  buffer = buffer.substring(0, cursorPosition) + yankBuffer + buffer.substring(cursorPosition);
+                  cursorPosition += yankBuffer.length;
+                  updateInputDisplay();
+              }
+              return;
 
+          case 'arrowleft':
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  updateInputDisplay();
+              }
+              return;
 
-  if (e.key === "ArrowUp") {
+          case 'arrowright':
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+
+  if (e.altKey && !e.ctrlKey) {
+      switch (e.key.toLowerCase()) {
+          case 'b': // Move back one word
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  updateInputDisplay();
+              }
+              return;
+          case 'f': // Move forward one word
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+  // --- END OF NEW SHORTCUTS ---
+
+  // Arrow keys and their Ctrl equivalents
+  if (e.key === "ArrowUp" || (e.ctrlKey && e.key.toLowerCase() === 'p')) {
     e.preventDefault();
     if (previousCommands.length > 0) {
-      if (previousCommandIndex === 0 && buffer.length > 0) {
-          // If currently typing something new, save it as a draft before navigating history
-          // This behavior can be refined. For now, simple history navigation.
-      }
       previousCommandIndex = Math.max(-previousCommands.length, previousCommandIndex - 1);
       buffer = previousCommands.at(previousCommandIndex) || "";
       cursorPosition = buffer.length;
@@ -2552,62 +2708,48 @@ document.body.addEventListener("keydown", async e => {
     }
     return;
   }
-  if (e.key === "ArrowDown") {
+  if (e.key === "ArrowDown" || (e.ctrlKey && e.key.toLowerCase() === 'n')) {
     e.preventDefault();
     if (previousCommands.length > 0 && previousCommandIndex < 0) {
         previousCommandIndex = Math.min(0, previousCommandIndex + 1);
-        if (previousCommandIndex === 0) {
-            buffer = ""; // Or restore a draft if implemented
-        } else {
-            buffer = previousCommands.at(previousCommandIndex) || "";
-        }
-    } else { // At the "bottom" of history (or no history), clear buffer
+        buffer = (previousCommandIndex === 0) ? "" : (previousCommands.at(previousCommandIndex) || "");
+    } else { 
         buffer = "";
     }
     cursorPosition = buffer.length;
     updateInputDisplay();
     return;
   }
-  if (e.key === "ArrowLeft") {
+  if (e.key === "ArrowLeft" || (e.ctrlKey && e.key.toLowerCase() === 'b')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
       updateInputDisplay();
-    } // Allow default if composing for IME navigation
+    }
     return;
   }
-  if (e.key === "ArrowRight") {
+  if (e.key === "ArrowRight" || (e.ctrlKey && e.key.toLowerCase() === 'f')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
       updateInputDisplay();
-    } // Allow default if composing
+    }
     return;
   }
 
   // Copy: Ctrl + Shift + C or Cmd + Shift + C
   if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
     e.preventDefault();
-    // Get Selected Text
     const selection = window.getSelection();
-    // remove white spaces after last non-space character and before \n), not only the space of the last line, but every line
     const selectedText = selection.toString()
       .split('\n')
       .map(line => line.replace(/\s+$/, ''))
       .join('\n');
     if (selectedText) {
-      navigator.clipboard.writeText(selectedText).then(() => {
-        // print("Copied to clipboard: " + selectedText, "success");
-      }).catch(err => {
-        // print("Failed to copy: " + err, "error");
-      });
-    } else {
-      // print("Nothing selected to copy.", "warning");
+      navigator.clipboard.writeText(selectedText);
     }
-
-    // Unselect text after copying
     selection.removeAllRanges();
     return;
   }
@@ -2619,8 +2761,8 @@ document.body.addEventListener("keydown", async e => {
         cursorPosition = 0;
         print(`${full_path} ${typedText.textContent}^C`);
         updateInputDisplay();
-    } else { // If buffer is empty, print prompt again (classic ^C behavior)
-        print(full_path); // Just print the prompt
+    } else { 
+        print(full_path);
     }
     return;
   }
@@ -2635,87 +2777,60 @@ document.body.addEventListener("keydown", async e => {
     e.preventDefault();
     clearSuggestions();
 
-    // --- FIX: Define command categories for smarter filtering ---
     const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
-    // For file-only commands, we add a special "./" type for executable bookmarks
     const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./"];
-    // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
+    const allCompletableCommands = [...Object.keys(commands), ...Object.keys(aliases)];
 
     const relevantInput = buffer.substring(0, cursorPosition);
-    const pre_parts = relevantInput.trimStart().split(/\s+/);
-    let commandName = pre_parts[0] || "";
+    const parts = relevantInput.trimStart().split(/\s+/);
+    const commandName = parts[0] || "";
+    const lastPart = parts[parts.length - 1] || "";
+    
+    let targetChildren = current.children;
+    let pathPrefix = "";
 
-    let prefixPath = "";
-    let namePrefixToComplete = "";
-    let currentContextChildren = current.children;
-    let effectiveCommandType = "";
-    let startOfBaseArgumentStringInRelevantInput = 0;
-
-    const allCompletableCommands = [
-        ...DIR_ONLY_COMMANDS, 
-        ...FILE_ONLY_COMMANDS, 
-        "ls", "rm", "mv", "cp", "touch" // Manually add universal commands
-    ];
-
-    if (commandName.startsWith("./")) {
-        effectiveCommandType = "./"; // Use the special type we defined
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
-    } else if (allCompletableCommands.includes(commandName)) {
-        effectiveCommandType = commandName;
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
-    } else {
-        return;
-    }
-
-    let baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
-    if (!baseArgumentString && relevantInput.endsWith(" ")) {
-        namePrefixToComplete = "";
-        prefixPath = "";
-    } else {
-        const lastSlashPos = baseArgumentString.lastIndexOf('/');
-        if (lastSlashPos > -1) {
-            prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
-            namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
+    const lastSlashIndex = lastPart.lastIndexOf('/');
+    if (lastSlashIndex !== -1) {
+        const dirPath = lastPart.substring(0, lastSlashIndex);
+        const startNode = dirPath.startsWith('/') ? root : current;
+        const result = findNodeByPath(dirPath);
+        if (result && result.node) {
+            targetChildren = result.node.children;
+            pathPrefix = dirPath + '/';
         } else {
-            prefixPath = "";
-            namePrefixToComplete = baseArgumentString;
+            return;
         }
     }
+
+    const toComplete = lastPart.substring(lastSlashIndex + 1);
+
+    if (!targetChildren) return;
+
+    let matches = targetChildren.filter(child => {
+        const title = child.title || "";
+        if (!title.toLowerCase().startsWith(toComplete.toLowerCase())) return false;
+        
+        const isDirectory = !!child.children;
+        const effectiveCommand = commandName.startsWith('./') ? './' : commandName;
+
+        if (DIR_ONLY_COMMANDS.includes(effectiveCommand)) return isDirectory;
+        if (FILE_ONLY_COMMANDS.includes(effectiveCommand)) return !isDirectory;
+        
+        return true;
+    }).map(child => child.title).sort();
     
-    currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
-    if (!currentContextChildren) currentContextChildren = [];
-
-    let matches = currentContextChildren
-        .filter(child => {
-            const title = child.title || "";
-            if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-
-            // --- FIX: New, smarter filtering logic based on command type ---
-            const isDirectory = !!child.children;
-
-            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return isDirectory; // Must be a directory
-            }
-            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return !isDirectory; // Must be a file
-            }
-
-            // Default case for commands like ls, rm, mv, cp: show everything
-            return true;
-        })
-        .map(child => child.title)
-        .sort();
-    
-    // The rest of the logic for displaying matches remains the same...
     if (matches.length === 1) {
         const match = matches[0];
-        const completion = match + " ";
-
-        const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-        const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
+        const completion = match + (targetChildren.find(c => c.title === match)?.children ? "/" : " ");
         
-        buffer = newBuffer;
-        cursorPosition = replaceFrom + prefixPath.length + completion.length;
+        const textBeforeCompletion = lastPart.substring(0, lastSlashIndex + 1);
+        const newLastPart = textBeforeCompletion + completion;
+        
+        parts[parts.length - 1] = newLastPart;
+        const newBufferStart = parts.join(" ");
+
+        buffer = newBufferStart + buffer.substring(cursorPosition);
+        cursorPosition = newBufferStart.length;
         updateInputDisplay();
 
     } else if (matches.length > 1) {
@@ -2726,20 +2841,21 @@ document.body.addEventListener("keydown", async e => {
             }
         }
 
-        if (commonPrefix.length > namePrefixToComplete.length) {
-            const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-            const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + commonPrefix + buffer.substring(cursorPosition);
-            
-            buffer = newBuffer;
-            cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
+        if (commonPrefix.length > toComplete.length) {
+            const textBeforeCompletion = lastPart.substring(0, lastSlashIndex + 1);
+            const newLastPart = textBeforeCompletion + commonPrefix;
+            parts[parts.length - 1] = newLastPart;
+            const newBufferStart = parts.join(" ");
+
+            buffer = newBufferStart + buffer.substring(cursorPosition);
+            cursorPosition = newBufferStart.length;
             updateInputDisplay();
         }
         
-        let outputLineContent = "";
-        matches.forEach(m => {
-             const matchedNode = currentContextChildren.find(c => c.title === m);
-             outputLineContent += (matchedNode && matchedNode.children ? m + "/" : m) + "   ";
-        });
+        let outputLineContent = matches.map(m => {
+             const matchedNode = targetChildren.find(c => c.title === m);
+             return (matchedNode && matchedNode.children ? m + "/" : m);
+        }).join("   ");
         
         suggestionsContainer.textContent = outputLineContent.trim();
         suggestionsContainer.style.display = "block";
@@ -2747,36 +2863,21 @@ document.body.addEventListener("keydown", async e => {
     return;
 }
 
-
-  if (control_cmd || e.metaKey || e.altKey) {
-    if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'v') {
-        // Paste handled by event listener
-    } else if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'c' && window.getSelection().toString().length > 0) {
-        // Allow native copy if text is selected
-    } else {
-       // return; // Let other Ctrl/Meta/Alt shortcuts behave normally or be ignored
-    }
-  }
-
   if (isComposing) return;
 
   if (e.key === "Backspace") {
     clearSuggestions(); 
     e.preventDefault();
     if (cursorPosition > 0) {
-      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
-      // Basic backspace, could be enhanced for ^H like behavior if needed
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
       updateInputDisplay();
     }
-  } else // in script.js, REPLACE the 'if (e.key === "Enter")' block in the keydown listener with this final version.
-
-if (e.key === "Enter") {
+  } else if (e.key === "Enter") {
     clearSuggestions();
     e.preventDefault();
-    if (commanding) return; // Don't process new commands if one is already running
+    if (commanding) return;
 
     const commandToProcess = buffer.trim();
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
@@ -2790,7 +2891,7 @@ if (e.key === "Enter") {
     updateInputDisplay();
 
     executeLine(commandToProcess);
-} else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
