@@ -765,11 +765,31 @@ const commands = {
     print(`${formattedDate}`);
     return " ";
   },
-  clear: (args, options) => {
-    clearOutput();
+  clear: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
-  cls: (args, options) => {
-    clearOutput();
+  cls: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
   cursor: (args) => {
     const supportedStyles = ['block', 'bar', 'underline'];
@@ -788,229 +808,211 @@ const commands = {
         return `Error: Style '${style}' not supported. Use one of: ${supportedStyles.join(', ')}`;
     }
   },
-  ls: (args, options, pipedInput) => {
-    // 1. Handle -l (long format)
-    if (options.l) {
-        if (!current || !current.children) return ["Error: current directory not available."];
-        return current.children.map(child => {
-            const owner = user || 'root';
-            const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
-            const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+  ls: {
+    exec: (args, options, pipedInput) => {
+        // 1. Get ALL real items from the current directory first.
+        let allItems = (current.children || []).map(child => ({
+            title: child.title,
+            node: child,
+            className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
+        }));
 
-            const typeChar = child.children ? "d" : "-";
-            const date = new Date(child.dateAdded || child.dateGroupModified || Date.now()).toLocaleString('sv-SE').substring(0, 16);
-            const typeClass = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
-            
-            const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
-            const title = `<span class="output-line-inline output-${typeClass}">${escapeHtml(child.title)}</span>`;
-            return perms + title;
-        });
-    }
+        // ★★★ NEW LOGIC: Filter items based on the '-a' option ★★★
+        // If '-a' is NOT present, filter out items that start with '.'
+        const itemsToDisplay = options.a 
+            ? allItems 
+            : allItems.filter(item => !item.title.startsWith('.'));
+        
+        // 3. Sort the filtered items alphabetically.
+        itemsToDisplay.sort((a, b) => a.title.localeCompare(b.title));
 
-    // 2. Standard multi-column layout
-    if (!current || !current.children || current.children.length === 0) return [];
-    
-    const items = current.children.map(child => ({
-        title: child.title,
-        className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
-    })).sort((a, b) => a.title.localeCompare(b.title));
+        // 4. Proceed with the display logic using the correctly filtered list.
+        if (options.l) { // Handle -l (long format)
+            if (itemsToDisplay.length === 0) return [];
+            return itemsToDisplay.map(item => {
+                const owner = user || 'root';
+                const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const typeChar = item.node.children ? "d" : "-";
+                const date = new Date(item.node.dateAdded || item.node.dateGroupModified).toLocaleString('sv-SE').substring(0, 16);
+                const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
+                const title = `<span class="output-line-inline output-${item.className}">${escapeHtml(item.title)}</span>`;
+                return perms + title;
+            });
+        }
 
-    // ★★★ FIX 1: Calculate width dynamically based on the actual terminal element ★★★
-    const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
-    if (isNaN(terminalWidth) || terminalWidth <= 0) { // Fallback if calculation fails
-        return items.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
-    }
+        // Standard multi-column layout
+        if (itemsToDisplay.length === 0) return [];
+        
+        const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+        if (isNaN(terminalWidth) || terminalWidth <= 0) {
+            return itemsToDisplay.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
+        }
+        const longestItemWidth = itemsToDisplay.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
+        const colWidth = longestItemWidth + 2;
+        let numCols = Math.floor(terminalWidth / colWidth);
+        if (numCols <= 1) {
+            return itemsToDisplay.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
+        }
+        const numRows = Math.ceil(itemsToDisplay.length / numCols);
+        const outputLines = [];
+        for (let row = 0; row < numRows; row++) {
+            let lineHtml = '';
+            for (let col = 0; col < numCols; col++) {
+                const index = row + col * numRows;
+                if (index < itemsToDisplay.length) {
+                    const item = itemsToDisplay[index];
+                    const title = escapeHtml(item.title);
+                    const currentVisualWidth = getVisualWidth(item.title);
+                    const paddingNeeded = colWidth - currentVisualWidth;
+                    const padding = ' '.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
+                    lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
+                }
+            }
+            outputLines.push(lineHtml);
+        }
+        return outputLines;
+    },
+    manual: "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l] [-a]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.\n  -a\tdo not ignore entries starting with ."
+  },
+  cd: {
+    exec: (args) => {
+        // The original logic of the cd command is now inside the 'exec' property.
+        if (args.length === 0) {
+          return "Usage: cd <directory>";
+        }
+        const targetPath = args.join(' ');
 
-    const longestItemWidth = items.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
-    const colWidth = longestItemWidth + 2;
-
-    let numCols = Math.floor(terminalWidth / colWidth);
-    if (numCols <= 1) { // Fallback to single column if it doesn't fit
-        return items.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
-    }
-    
-    // 4. Build multi-column HTML output
-    const numRows = Math.ceil(items.length / numCols);
-    const outputLines = [];
-
-    for (let row = 0; row < numRows; row++) {
-        let lineHtml = '';
-        for (let col = 0; col < numCols; col++) {
-            const index = row + col * numRows;
-            if (index < items.length) {
-                const item = items[index];
-                const title = escapeHtml(item.title);
-                const currentVisualWidth = getVisualWidth(item.title);
-                const paddingNeeded = colWidth - currentVisualWidth;
-                
-                // ★★★ FIX 2: Use non-breaking spaces (&nbsp;) for padding to prevent collapsing ★★★
-                const padding = '&nbsp;'.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
-                
-                lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
+        if (targetPath === "..") {
+            if (path.length > 1) {
+                path.pop();
+                current = path[path.length - 1];
+                saveCurrentPath();
+            }
+        } else {
+            const result = findNodeByPath(targetPath);
+            if (result && result.node && result.node.children) { // Ensure it's a directory
+                current = result.node;
+                path = result.newPathArray;
+                saveCurrentPath();
+            } else if (result && result.node && !result.node.children) {
+                 print(`cd: ${targetPath}: Not a directory`, "error");
+            } else {
+                print(`cd: ${targetPath}: No such file or directory`, "error");
             }
         }
-        outputLines.push(lineHtml);
-    }
-    return outputLines;
+        update_user_path();
+    },
+    manual: "NAME\n  cd - change the current directory\n\nSYNOPSIS\n  cd <directory>\n  cd ..\n\nDESCRIPTION\n  Change the current bookmark folder to <directory>. 'cd ..' moves to the parent folder."
   },
-  cd: (args) => {
-    if (args.length === 0) {
-      return "Usage: cd <directory>";
-    }
-    const targetPath = args.join(' ');
+  pwd: {
+    exec: () => "/" + path.slice(1).map(p => p.title).join("/"),
+    manual: 
+    `NAME
+  pwd - print name of current/working directory
 
-    if (targetPath === "..") {
-        if (path.length > 1) {
-            path.pop();
-            current = path[path.length - 1];
-            saveCurrentPath();
-        }
-    } else {
-        const result = findNodeByPath(targetPath);
-        if (result && result.node) {
-            current = result.node;
-            path = result.newPathArray;
-            saveCurrentPath();
-        } else {
-            print(`cd: ${targetPath}: No such file or directory`, "error");
-        }
-    }
-    update_user_path();
+SYNOPSIS
+  pwd
+
+DESCRIPTION
+  Print the full path of the current bookmark folder.`
   },
-  pwd: (args, options) => {
-    // We take the path array, ignore the first element (the root which has no title),
-    // map the rest to their titles, and join them with slashes.
-    // A single leading slash is added to represent the root directory.
-    const pathString = "/" + path.slice(1).map(p => p.title).join("/");
-    return pathString;
-  },
-  mkdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: mkdir <directory_name>");
-            return resolve();
-        }
+  mkdir: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: mkdir <directory_name>"); return resolve(); }
         const dirName = args.join(" ");
-
-        const existing = findChildByTitle(current.children || [], dirName);
-        if (existing) {
+        if (findChildByTitle(current.children || [], dirName)) {
             print(`mkdir: cannot create directory '${dirName}': File exists`);
             return resolve();
         }
-
-        chrome.bookmarks.create(
-            { parentId: current.id, title: dirName },
-            (newFolder) => {
-                if (chrome.runtime.lastError) {
-                    print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
-                    resolve();
-                  } else {
-                    print(`Directory '${newFolder.title}' created.`);
-                    chrome.bookmarks.getSubTree(current.id, (results) => {
-                        if (results && results[0]) {
-                            current = results[0];
-                            path[path.length - 1] = current;
-                        }
-                        resolve();
-                    });
-                }
+        chrome.bookmarks.create({ parentId: current.id, title: dirName }, async (newFolder) => {
+            if (chrome.runtime.lastError) {
+                print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Directory '${newFolder.title}' created.`);
+                await refreshStateAfterModification(); // ★★★ Use the new refresh function
             }
-        );
-    });
+            resolve();
+        });
+    }),
+    manual: `NAME
+  mkdir - make directories
+
+SYNOPSIS
+  mkdir <directory_name>
+
+DESCRIPTION
+  Create a new bookmark folder named <directory_name>.`
   },
-  rm: (args, options) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rm [-r] [-f] <name>");
-            return resolve();
-        }
+
+  rm: {
+    exec: (args, options) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: rm [-r] [-f] <name>"); return resolve(); }
         const targetName = args.join(" ");
         const target = findChildByTitleFileOrDir(current.children || [], targetName);
-
         if (!target) {
             if (options.f) return resolve();
             print(`rm: cannot remove '${targetName}': No such file or directory`);
             return resolve();
         }
-
         const isDirectory = !!target.children;
         const isRecursive = !!options.r;
 
-        const refreshCurrentAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-
-        if (isDirectory && isRecursive) {
-            chrome.bookmarks.removeTree(target.id, () => {
-                if (chrome.runtime.lastError) {
-                    print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
-                } else {
-                    print(`Recursively removed '${targetName}'.`);
-                }
-                refreshCurrentAndResolve();
-            });
-            return;
-        }
-
-        if (isDirectory && target.children.length > 0) {
-            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
-            return resolve();
-        }
-
-        chrome.bookmarks.remove(target.id, () => {
+        const removeCallback = async () => {
             if (chrome.runtime.lastError) {
                 print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
             } else {
                 print(`Removed '${targetName}'.`);
             }
-            refreshCurrentAndResolve();
-        });
-    });
-  },
-  rmdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rmdir <directory_name>");
-            return resolve();
-        }
-        const dirName = args.join(" ");
-        const target = findChildByTitleFileOrDir(current.children || [], dirName);
+            await refreshStateAfterModification(); // ★★★ Use the new refresh function
+            resolve();
+        };
 
-        if (!target) {
-            print(`rmdir: failed to remove '${dirName}': No such directory`);
+        if (isDirectory && isRecursive) {
+            chrome.bookmarks.removeTree(target.id, removeCallback);
+            return;
+        }
+        if (isDirectory && target.children.length > 0) {
+            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
             return resolve();
         }
-        if (!target.children) {
-            print(`rmdir: failed to remove '${dirName}': Not a directory`);
-            return resolve();
-        }
-        if (target.children.length > 0) {
-            print(`rmdir: failed to remove '${dirName}': Directory not empty`);
-            return resolve();
-        }
+        chrome.bookmarks.remove(target.id, removeCallback);
+    }),
+    manual: `NAME
+  rm - remove files or directories
 
-        chrome.bookmarks.remove(target.id, () => {
-            if (chrome.runtime.lastError) {
-                print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
-            } else {
-                print(`Removed directory '${dirName}'.`);
-            }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        });
-    });
+SYNOPSIS
+  rm [-r] [-f] <name>
+
+DESCRIPTION
+  Removes the specified bookmark or folder.
+
+  -r    remove directories and their contents recursively.
+  -f    force. Ignore nonexistent files, never prompt.`
   },
+  rmdir: (args) => new Promise(async (resolve) => {
+    if (args.length === 0) { print("Usage: rmdir <directory_name>"); return resolve(); }
+    const dirName = args.join(" ");
+    const target = findChildByTitleFileOrDir(current.children || [], dirName);
+    if (!target) {
+        print(`rmdir: failed to remove '${dirName}': No such directory`); return resolve();
+    }
+    if (!target.children) {
+        print(`rmdir: failed to remove '${dirName}': Not a directory`); return resolve();
+    }
+    if (target.children.length > 0) {
+        print(`rmdir: failed to remove '${dirName}': Directory not empty`); return resolve();
+    }
+    chrome.bookmarks.remove(target.id, async () => {
+        if (chrome.runtime.lastError) {
+            print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
+        } else {
+            print(`Removed directory '${dirName}'.`);
+        }
+        await refreshStateAfterModification(); // ★★★ Use the new refresh function
+        resolve();
+    });
+  }),
   'privacy-ok' : (args, options) => {
     awaiting();
     chrome.storage.sync.set({ privacyPolicyVersion: PRIVACY_POLICY_VERSION }, () => {
@@ -1019,19 +1021,37 @@ const commands = {
     done();
   },
   // Theme 
-  theme: (args, options) => {
-    const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-    const themeName = args[0];
-    if (!themeName) {
-        return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
-    }
-    if (supportedThemes.includes(themeName)) {
-        applyTheme(themeName);
-        chrome.storage.sync.set({ theme: themeName }); // 保存新设置
-        return `Theme set to ${themeName}.`;
-    } else {
-        return `Error: Theme '${themeName}' not supported.`;
-    }
+  theme: {
+    exec: (args, options) => {
+        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+        const themeName = args[0];
+        if (!themeName) {
+            return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+        }
+        if (supportedThemes.includes(themeName)) {
+            applyTheme(themeName);
+            return `Theme set to ${themeName}.`;
+        } else {
+            return `Error: Theme '${themeName}' not supported.`;
+        }
+    },
+    suggestions: (args) => {
+        if (args.length <= 1) {
+            return ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+        }
+        return [];
+    },
+    manual: `NAME
+  theme - change the terminal's color scheme
+
+SYNOPSIS
+  theme [<theme_name>]
+
+DESCRIPTION
+  Switches the visual theme of the terminal. If no theme is provided, it lists the current and available themes.
+
+AVAILABLE THEMES
+  default, ubuntu, powershell, cmd, kali, debian`
   },
 
   config: {
@@ -1156,6 +1176,27 @@ const commands = {
         }
         return [];
     },
+    manual: `NAME
+  config - manage terminal configuration
+
+SYNOPSIS
+  config [setup <mode> | sync | autosync | status]
+
+DESCRIPTION
+  Manages how and where terminal settings are stored.
+
+  setup <bookmark|storage>
+    Sets the primary settings backend. 'storage' is the browser's sync storage. 'bookmark' uses a hidden ~/.settings folder in your bookmarks bar, allowing for manual editing.
+
+  sync
+    In bookmark mode, this command pulls all settings from browser storage and writes them to the ~/.settings folder, creating default files if they don't exist.
+
+  autosync
+    Toggles automatic synchronization. When enabled, settings are written to both backends simultaneously.
+
+  status
+    Displays the current configuration mode and autosync status.`
+    
   },
 
   uploadbg: () => {
@@ -1185,30 +1226,28 @@ const commands = {
     }
     return ""; // Return empty string for a clean prompt return
   },
-  cat: (args, options) => {
-    if (args.length === 0) {
-      return "Usage: cat <bookmark_name>";
-    }
-    const targetName = args.join(" ");
-    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+  cat: {
+    exec: (args) => {
+        if (args.length === 0) return "Usage: cat <bookmark_name>";
+        const targetName = args.join(" ");
+        const target = findChildByTitleFileOrDir(current.children || [], targetName);
+        if (!target) return `cat: ${targetName}: No such file or directory`;
+        if (target.children) return `cat: ${targetName}: Is a directory`;
+        print("--- Bookmark Details ---", "highlight");
+        print(`Title:    ${target.title}`);
+        print(`URL:      ${target.url}`);
+        if (target.dateAdded) print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
+        print("----------------------", "highlight");
+        return "";
+    },
+    manual: `NAME
+  cat - display bookmark details
 
-    if (!target) {
-      return `cat: ${targetName}: No such file or directory`;
-    }
+SYNOPSIS
+  cat <bookmark_name>
 
-    if (target.children) { // It's a directory
-      return `cat: ${targetName}: Is a directory`;
-    }
-
-    // It's a bookmark, print its details
-    print("--- Bookmark Details ---", "highlight");
-    print(`Title:    ${target.title}`);
-    print(`URL:      ${target.url}`);
-    if (target.dateAdded) {
-       print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
-    }
-    print("----------------------", "highlight");
-    return "";
+DESCRIPTION
+  Displays the title, URL, and creation date of a specified bookmark.`
   },
 
   setbg: (args) => {
@@ -1311,68 +1350,59 @@ const commands = {
       applyUpdates();
     }
   },
-  history: (args, options, pipedInput) => {
-    if (previousCommands.length === 0) {
-      return ["No history yet."];
-    }
-    // Map history to an array of strings
-    return previousCommands.map((cmd, index) => {
-        const paddedIndex = String(index + 1).padStart(3, ' ');
-        return `${paddedIndex}  ${cmd}`;
-    });
+  history: {
+    exec: () => {
+        if (previousCommands.length === 0) return ["No history yet."];
+        return previousCommands.map((cmd, index) => `${String(index + 1).padStart(3, ' ')}  ${cmd}`);
+    },
+    manual: `NAME
+  history - display command history
+
+SYNOPSIS
+  history
+
+DESCRIPTION
+  Displays the list of previously executed commands.`
   },
 
-  touch: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: touch <filename>");
-            return resolve();
-        }
+  touch: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: touch <filename>"); return resolve(); }
         const filename = args.join(" ");
-        const existing = findChildByTitleFileOrDir(current.children || [], filename);
-
-        if (existing) {
-            return resolve();
-        }
-
-        chrome.bookmarks.create({
-            parentId: current.id,
-            title: filename,
-            url: "about:blank#touched"
-        }, (newItem) => {
+        if (findChildByTitleFileOrDir(current.children || [], filename)) return resolve();
+        
+        chrome.bookmarks.create({ parentId: current.id, title: filename, url: "about:blank#touched" }, async (newItem) => {
             if (chrome.runtime.lastError) {
                 print(`Error: ${chrome.runtime.lastError.message}`, "error");
             }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
+            await refreshStateAfterModification(); // ★★★ FIX IS HERE ★★★
+            resolve();
         });
-    });
+    }),
+    manual: `NAME
+  touch - create a new, empty bookmark
+
+SYNOPSIS
+  touch <filename>
+
+DESCRIPTION
+  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.`
   },
-  editlink: (args) => {
-    return new Promise((resolve) => {
+  editlink: {
+    exec: (args) => new Promise((resolve) => {
         if (args.length < 2) {
             print("Usage: editlink <bookmark_name> <new_url>");
             return resolve();
         }
         const bookmarkName = args.shift(); 
         const newUrl = args.join(' ');
-
         const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
         if (!target) {
-            print(`editlink: '${bookmarkName}': No such file or bookmark.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': No such file or bookmark.`); return resolve();
         }
         if (target.children) {
-            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`); return resolve();
         }
-
         chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
             if (chrome.runtime.lastError) {
                 print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
@@ -1380,7 +1410,6 @@ const commands = {
                 print(`Updated link for '${updatedNode.title}'.`);
                 print(`New URL: ${updatedNode.url}`, "success");
             }
-            
             chrome.bookmarks.getSubTree(current.id, (results) => {
                 if (results && results[0]) {
                     current = results[0];
@@ -1389,78 +1418,147 @@ const commands = {
                 resolve();
             });
         });
-    });
+    }),
+    manual: `NAME
+  editlink - change the URL of a bookmark
+
+SYNOPSIS
+  editlink <bookmark_name> <new_url>
+
+DESCRIPTION
+  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.`
   },
-  mv: (args) => {
-    return new Promise((resolve) => {
+  mv: {
+    exec: async (args) => {
         if (args.length < 2) {
-            print("Usage: mv <source> <destination>");
-            return resolve();
+            print("Usage: mv <source> <destination_path>");
+            return;
         }
         const sourceName = args[0];
-        const destName = args[1];
+        const destArg = args[1];
+
         const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
         if (!sourceNode) {
             print(`mv: cannot stat '${sourceName}': No such file or directory`);
-            return resolve();
+            return;
         }
-        const destNode = findChildByTitleFileOrDir(current.children || [], destName);
 
-        const refreshAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-        
-        if (destNode && destNode.children) {
-            chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+
+        // If destArg ends with '/', it's definitely a directory path.
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.'; // Handle case of just "/"
+            newName = sourceNode.title; // Keep original name
         } else {
-            chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                // No slash, means renaming in the current directory.
+                destPath = '.';
+                newName = destArg;
+            }
         }
-    });
+        if (newName === "") newName = sourceNode.title; // if path is like '~/folder/', newName is empty, so use original
+
+        const destDirResult = findNodeByPath(destPath);
+
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`mv: cannot move '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        const destParentId = destDirResult.node.id;
+
+        // Step 1: Move the node to the new parent directory.
+        await new Promise(resolve => {
+            chrome.bookmarks.move(sourceNode.id, { parentId: destParentId }, (movedNode) => {
+                if (chrome.runtime.lastError) {
+                    print(`Error moving: ${chrome.runtime.lastError.message}`, "error");
+                    resolve();
+                    return;
+                }
+                // Step 2: If a new name is specified, update the title.
+                if (newName && newName !== movedNode.title) {
+                    chrome.bookmarks.update(movedNode.id, { title: newName }, resolve);
+                } else {
+                    resolve();
+                }
+            });
+        });
+
+        await refreshStateAfterModification();
+    },
+    manual: `NAME
+  mv - move (rename) files
+
+SYNOPSIS
+  mv <source> <destination>
+
+DESCRIPTION
+  Renames <source> to <destination>, or moves <source> into <destination> if <destination> is an existing folder.`
   },
-  cp: async (args, options) => {
-    if (args.length < 2) {
-      return "Usage: cp [-r] <source> <destination>";
-    }
-    const sourceName = args[0];
-    const destName = args[1];
-    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
-    if (!sourceNode) {
-      return `cp: cannot stat '${sourceName}': No such file or directory`;
-    }
-    if (sourceNode.children && !options.r) {
-      return `cp: -r not specified; omitting directory '${sourceName}'`;
-    }
-    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
-    
-    try {
-      if (destNode && destNode.children) {
-        await copyNodeRecursively(sourceNode, destNode.id);
-      } else {
-        await copyNodeRecursively(sourceNode, current.id, destName);
-      }
-      
-      const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
-      if (results && results[0]) {
-          current = results[0];
-          path[path.length - 1] = current;
-      }
-    } catch (e) {
-      print(`Error copying: ${e.message}`, "error");
-    }
+
+  cp: {
+    exec: async (args, options) => {
+        if (args.length < 2) return "Usage: cp [-r] <source> <destination_path>";
+        const sourceName = args[0];
+        const destArg = args[1];
+
+        const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+        if (!sourceNode) return `cp: cannot stat '${sourceName}': No such file or directory`;
+        if (sourceNode.children && !options.r) return `cp: -r not specified; omitting directory '${sourceName}'`;
+
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+        
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.';
+            newName = sourceNode.title;
+        } else {
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                destPath = '.';
+                newName = destArg;
+            }
+        }
+        if (newName === "") newName = sourceNode.title;
+
+        const destDirResult = findNodeByPath(destPath);
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`cp: cannot copy '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        try {
+            await copyNodeRecursively(sourceNode, destDirResult.node.id, newName);
+            await refreshStateAfterModification();
+        } catch (e) {
+            print(`Error copying: ${e.message}`, "error");
+        }
+    },
+    manual: `NAME
+  cp - copy files and directories
+
+SYNOPSIS
+  cp [-r] <source> <destination>
+
+DESCRIPTION
+  Copies <source> to <destination>.
+
+  -r    copy directories recursively.`
   },
-  find: (args, options) => {
+  find: {
+    exec: (args, options) => {
     return new Promise(resolve => {
         if (args.length == 0) {
             print("Usage: find -name <pattern>");
@@ -1478,6 +1576,15 @@ const commands = {
         resolve();
     });
   },
+  manual: `NAME
+  find - search for files in a directory hierarchy
+
+SYNOPSIS
+  find -name <pattern>
+
+DESCRIPTION
+  Searches for bookmarks/folders matching the <pattern> within the current directory. The pattern can include a wildcard '*' (e.g., 'find -name "*search*").`
+},
 
   alias: (args) => {
       if (args.length === 0) {
@@ -1526,13 +1633,23 @@ const commands = {
           return "What manual page do you want?";
       }
       const page = args[0];
-      const content = manPages[page];
+      const commandDef = commands[page];
+      let content = null;
+
+      // Priority 1: Check for the '.manual' property in the new command format.
+      if (commandDef && typeof commandDef === 'object' && commandDef.manual) {
+          content = commandDef.manual;
+      } 
+      // Priority 2: Fallback to the old manPages object for backward compatibility.
+      else if (manPages[page]) {
+          content = manPages[page];
+      }
 
       if (!content) {
           return `No manual entry for ${page}`;
       }
 
-      // Print with pre-wrap to respect newlines in the man page content
+      // The logic for printing the manual content remains the same.
       const lines = content.split('\n');
       lines.forEach(line => {
         // Simple formatting for headings (uppercase)
@@ -1745,6 +1862,54 @@ const commands = {
 };
 
 /**
+ * Recursively finds a node by its ID within a given tree.
+ * @param {object} node - The starting node (e.g., the root).
+ * @param {string} targetId - The ID of the node to find.
+ * @param {array} currentPathArray - The path array leading to the starting node.
+ * @returns {{node: object, path: array}|null}
+ */
+function findNodeById(node, targetId, currentPathArray) {
+    if (node.id === targetId) {
+        return { node: node, path: currentPathArray };
+    }
+    if (node.children) {
+        for (const child of node.children) {
+            const result = findNodeById(child, targetId, [...currentPathArray, child]);
+            if (result) return result;
+        }
+    }
+    return null;
+}
+
+/**
+ * Performs a full state refresh after a bookmark modification.
+ * Re-fetches the entire bookmark tree and rebuilds all path-related global variables.
+ */
+async function refreshStateAfterModification() {
+    const currentId = current.id; // Save the ID of our current location
+
+    // 1. Re-fetch the entire tree to get fresh data
+    const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+    
+    // 2. Re-initialize global root variables
+    root = bookmarkTree[0];
+    homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
+
+    // 3. Find our current location in the NEW tree and rebuild the path
+    const result = findNodeById(root, currentId, [root]);
+
+    if (result) {
+        // If our current directory still exists, restore the state
+        current = result.node;
+        path = result.path;
+    } else {
+        // If our directory was deleted (e.g., by 'rm -r .'), go back to home
+        current = homeDirNode;
+        path = [root, homeDirNode];
+    }
+}
+
+/**
  * Finds a bookmark node by a given path string (absolute or relative).
  * @param {string} pathStr The path string, e.g., "MyFolder" or "/Work/Projects".
  * @returns {{node: object, newPathArray: array}|null} The found node and its full path array, or null if not found.
@@ -1933,22 +2098,30 @@ function parseCommandLine(input) {
   const args = [];
   const options = {};
 
-  const optionRequiresValue = { // Define which options expect a value
+  const optionRequiresValue = {
       ping: ["n"],
-      // Add other commands and their value-expecting options if any
+      // Define other commands and their value-expecting options here if any
   };
   const commandSpecificOptionValues = optionRequiresValue[command] || [];
 
   for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
-      if (token.startsWith("-")) {
-          const optName = token.replace(/^-+/, "");
-          if (commandSpecificOptionValues.includes(optName) && tokens[i+1] && !tokens[i+1].startsWith("-")) {
-              options[optName] = tokens[i+1];
-              i++; // Skip next token as it's the value
+      if (token.startsWith("-") && !token.startsWith("--")) { // Handle short options like -a, -l, -al
+          const optString = token.substring(1); // e.g., "al" or "n"
+
+          // Check if this is an option that expects a value (like 'ping -n 5')
+          if (commandSpecificOptionValues.includes(optString) && tokens[i + 1] && !tokens[i + 1].startsWith("-")) {
+              options[optString] = tokens[i + 1];
+              i++; // Important: skip the next token as it's been consumed as a value
           } else {
-              options[optName] = true;
+              // ★★★ NEW LOGIC: Treat it as a set of single-character boolean flags ★★★
+              for (const char of optString) {
+                  options[char] = true; // This will set options['a']=true and options['l']=true
+              }
           }
+      } else if (token.startsWith("--")) { // Handle long options like --help (for future use)
+           const optName = token.substring(2);
+           options[optName] = true;
       } else {
           args.push(token);
       }
