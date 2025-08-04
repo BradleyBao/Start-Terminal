@@ -38,6 +38,7 @@ let activeGrepPattern = null;
 
 let isEditing = false; 
 let editingBookmarkId = null; 
+let editingBookmarkTitle = null;
 
 let activeEditor = null;
 let unsavedChanges = false;
@@ -608,7 +609,9 @@ async function getSetting(key) {
         if (bookmarkSetting !== null) {
             return bookmarkSetting;
         }
+        print(`[warn] bookmark config '${key}' missing, using stored defaults`, "warning");
     }
+    
     // 默认或回退都从 storage 读取
     const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
     return storageData[key];
@@ -1035,6 +1038,44 @@ const commands = {
     exec: async (args) => {
     const subCommand = args.shift() || 'status';
 
+    // Helper function for migration logic to avoid repetition
+    const migrateToBookmarks = async () => {
+        print("Migrating settings from storage to bookmarks...");
+        for (const key of CONFIG_KEYS) {
+            const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
+            let valueToWrite = storageData[key];
+
+            // ★★★ FIX IS HERE ★★★
+            // If the value is missing from storage, create a default value.
+            if (valueToWrite === undefined) {
+                print(`'${key}' not found in storage, creating default bookmark...`, "hint");
+                switch (key) {
+                    case 'aliases':
+                    case 'environmentVars':
+                        valueToWrite = {};
+                        break;
+                    case 'settings':
+                        valueToWrite = { default_mode: default_mode, default_search_engine: default_search_engine };
+                        break;
+                    case 'theme':
+                        valueToWrite = promptTheme || 'default';
+                        break;
+                    case 'cursorStyle':
+                        valueToWrite = cursorStyle || 'block';
+                        break;
+                    default:
+                        valueToWrite = null; // Don't write unknown keys
+                }
+            }
+            
+            if (valueToWrite !== null) {
+                await writeSettingToBookmark(key, valueToWrite);
+            }
+        }
+        print("Migration complete.", "success");
+    };
+
+
     switch (subCommand) {
         case 'setup':
             const mode = args[0];
@@ -1046,41 +1087,20 @@ const commands = {
             if (mode === 'bookmark') {
                 let settingsFolder = await getOrCreateSettingsFolder(false);
                 if (settingsFolder) {
-                    // 文件夹已存在
                     print("'.settings' folder already exists.", "warning");
                     let replace = await userInputMode("Replace settings in bookmark with settings from storage? [Y/n] ");
                     print(`Replace settings in bookmark with settings from storage? [Y/n] ${user_input_content}`)
                     if (replace) {
-                        print("Migrating settings from storage to bookmarks...");
-                        for (const key of CONFIG_KEYS) {
-                            const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
-                            if (storageData[key] !== undefined) {
-                                await writeSettingToBookmark(key, storageData[key]);
-                            }
-                        }
-                        print("Migration complete.", "success");
+                        await migrateToBookmarks();
                     } else {
                         print("Keeping existing bookmark settings.", "info");
                     }
                 } else {
-                    // 文件夹不存在，首次设置
                     let confirm = await userInputMode("This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ");
                     print(`This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ${user_input_content}`)
                     if (confirm) {
-                        print("Creating .settings folder and migrating settings...");
-                        settingsFolder = await getOrCreateSettingsFolder(true);
-                        if(settingsFolder) {
-                            for (const key of CONFIG_KEYS) {
-                                const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
-                                if (storageData[key] !== undefined) {
-                                    await writeSettingToBookmark(key, storageData[key]);
-                                }
-                            }
-                             print("Migration complete.", "success");
-                        } else {
-                             print("Failed to create .settings folder. Aborting.", "error");
-                             return;
-                        }
+                        await getOrCreateSettingsFolder(true); // Ensure folder is created before migration
+                        await migrateToBookmarks();
                     } else {
                         print("Setup aborted by user.", "info");
                         return;
@@ -1096,28 +1116,17 @@ const commands = {
         case 'sync':
             awaiting();
             if (configMode === 'storage') {
-                print("Syncing: Bookmarks -> Storage");
-                for (const key of CONFIG_KEYS) {
-                    const bookmarkValue = await readSettingFromBookmark(key);
-                    if (bookmarkValue !== null) {
-                        await new Promise(resolve => chrome.storage.sync.set({ [key]: bookmarkValue }, resolve));
-                    }
-                }
+                print("Syncing: Bookmarks -> Storage not implemented yet. Switch to bookmark mode to sync from storage.", "warning");
+                // The logic for Bookmarks -> Storage would be more complex
+                // as it involves reading all bookmark files and setting them in storage.
             } else { // configMode === 'bookmark'
-                print("Syncing: Storage -> Bookmarks");
-                for (const key of CONFIG_KEYS) {
-                    const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
-                    if (storageData[key] !== undefined) {
-                        await writeSettingToBookmark(key, storageData[key]);
-                    }
-                }
+                await migrateToBookmarks();
             }
-            print("Sync complete.", "success");
             done();
             break;
 
         case 'autosync':
-            autosyncEnabled = !autosyncEnabled; // 切换状态
+            autosyncEnabled = !autosyncEnabled;
             await new Promise(resolve => chrome.storage.sync.set({ autosyncEnabled: autosyncEnabled }, resolve));
             print(`Autosync is now ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}.`, "success");
             if (autosyncEnabled) {
@@ -1132,30 +1141,20 @@ const commands = {
             print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
             print("\nAvailable commands:", "hint");
             print("  config setup <bookmark|storage> - Set the primary settings backend.");
-            print("  config sync                     - Manually sync between backends.");
+            print("  config sync                     - Sync settings from storage to bookmarks.");
             print("  config autosync                 - Toggle auto-syncing on changes.");
             break;
       }
     },
     suggestions: (args) => {
-        // args 是 "config" 之后的所有参数数组
-        // "config" -> args is []
-        // "config " -> args is [""]
-        // "config setup" -> args is ["setup"]
-        // "config setup " -> args is ["setup", ""]
         const subCommand = args[0];
-
         if (args.length <= 1) {
-            // 如果正在输入第一个参数，或者刚刚输入完第一个参数
             return ['setup', 'sync', 'autosync', 'status'];
         }
-        
         if (subCommand === 'setup' && args.length <= 2) {
-            // 如果第一个参数是 'setup'，并且正在输入第二个参数
             return ['bookmark', 'storage'];
         }
-        
-        return []; // 其他情况不提供建议
+        return [];
     },
   },
 
@@ -1836,12 +1835,11 @@ function setupNanoEditor(args) {
     isEditing = true;
     activeEditor = 'nano';
     editingBookmarkId = target.id;
+    editingBookmarkTitle = target.title; // ★★★ 新增：保存当前文件名 ★★★
     unsavedChanges = false;
     
-    // Check if we are editing a special settings file
-    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(bookmarkName);
+    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
-    // Hide both fields initially, then show the correct one.
     document.getElementById('nano-fields').style.display = 'none';
     document.getElementById('editor-textarea').style.display = 'none';
 
@@ -1850,16 +1848,14 @@ function setupNanoEditor(args) {
         try {
             const rawJson = decodeURIComponent(target.url.split('#')[1] || '');
             const parsedJson = JSON.parse(rawJson);
-            textarea.value = JSON.stringify(parsedJson, null, 2); // Pretty print JSON
+            textarea.value = JSON.stringify(parsedJson, null, 2);
         } catch (e) {
             textarea.value = "Error: Could not parse bookmark data. Saving will overwrite.";
         }
         textarea.style.display = 'block';
         textarea.readOnly = false;
         setTimeout(() => textarea.focus(), 0);
-
     } else {
-        // --- ORIGINAL LOGIC for regular bookmarks ---
         document.getElementById('nano-fields').style.display = 'block';
         editorTitleInput.value = target.title;
         editorUrlInput.value = target.url;
@@ -2713,133 +2709,99 @@ async function loadSettings() {
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
   const trueRoot = bookmarkTree[0];
   
-  // Correctly assign the fetched bookmark tree to the global 'root' variable
   root = trueRoot; 
 
   // Set the home directory '~' to be the "Favorites bar"
   if (trueRoot.children && trueRoot.children.length > 0) {
     homeDirNode = trueRoot.children[0];
   } else {
-    // Fallback: if there are no children, home is the same as the root.
     homeDirNode = root; 
   }
 
-  // Set the starting location to the home directory.
   current = homeDirNode;
-  // The path must reflect the full hierarchy, starting from the now-defined 'root'.
   path = [root, homeDirNode];
 
-  // Load Config 
+  // 2. Load configuration mode first
   const configData = await chrome.storage.sync.get(['configMode', 'autosyncEnabled']);
   configMode = configData.configMode || 'storage';
   autosyncEnabled = configData.autosyncEnabled || false;
 
-
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'cursorStyle']);
-  
+  // 3. Load all settings using the getSetting router, which respects configMode
   aliases = await getSetting('aliases') || {};
   environmentVars = await getSetting('environmentVars') || {};
   promptTheme = await getSetting('theme') || 'default';
+  
   const loadedSettings = await getSetting('settings');
   if (loadedSettings) {
       default_mode = loadedSettings.default_mode ?? false;
       default_search_engine = loadedSettings.default_search_engine ?? "google";
-  }
-  const loadedCursorStyle = await getSetting('cursorStyle');
-  if (loadedCursorStyle) {
-      applyCursorStyle(loadedCursorStyle);
   } else {
-      applyCursorStyle('block');
+      default_mode = false;
+      default_search_engine = "google";
+  }
+  
+  const loadedCursorStyle = await getSetting('cursorStyle');
+  applyCursorStyle(loadedCursorStyle || 'block');
+
+
+  // 4. Load other non-routable settings directly from storage
+  const data = await chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion']);
+  
+  if (data.commandHistory) {
+    previousCommands.push(...data.commandHistory);
   }
 
-  // 3. Restore bookmark path
+  // 5. Restore last used bookmark path
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
-    let tempCurrent = root; // Start from the valid root
+    let tempCurrent = root;
     let tempPath = [root];
-
-    // Starting from the root, find each child by its ID to rebuild the path
     for (let i = 1; i < data.bookmarkPath.length; i++) {
       const nextId = data.bookmarkPath[i];
       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
-
-      if (nextNode && nextNode.children) { // Ensure the node still exists and is a folder
+      if (nextNode && nextNode.children) {
         tempCurrent = nextNode;
         tempPath.push(nextNode);
       } else {
-        restoredPathIsValid = false; // If a folder in the path was deleted, restoration fails
+        restoredPathIsValid = false;
         break;
       }
     }
-
     if (restoredPathIsValid) {
       current = tempCurrent;
       path = tempPath;
     }
   }
 
-  if (data.aliases) {
-    aliases = data.aliases;
-  }
-    
-  if (data.settings) {
-    default_mode = data.settings.default_mode ?? false;
-    default_search_engine = data.settings.default_search_engine ?? "google";
-  }
-
-  if (data.commandHistory) {
-    previousCommands.push(...data.commandHistory);
-  }
-
-  if (data.environmentVars) {
-    environmentVars = data.environmentVars;
-  }
-
+  // 6. Handle Microsoft Account session
   if (data.msAuth && data.msAuth.tokenInfo) {
     let currentAuth = data.msAuth;
     if (Date.now() > currentAuth.expirationTime) {
-      // Token has expired, try to refresh it
       currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
     }
-
     if (currentAuth) {
-      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
-      user = user_info;
-      print(`Welcome back, ${user_info}`, "success");
+      user = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+      print(`Welcome back, ${user}`, "success");
     }
   }
-
+  
+  // 7. Handle Privacy Policy check
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
-    // If the privacy policy version does not match, show a notice
     setTimeout(() => showPrivacyUpdateNotice(), 100);
   }
 
+  // 8. Load and apply background settings
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  applyTheme(promptTheme); // Apply theme loaded via getSetting
   
-  if (data.theme) {
-    // promptTheme = data.theme;
-    applyTheme(promptTheme);
-  }
+  if (data.imgAPI) promptBgRandomAPI = data.imgAPI;
+  promptOpacity = data.background_opacity || 0.15;
   
-  if (data.imgAPI) {
-    promptBgRandomAPI = data.imgAPI;
-  }
   if (localData.customBackground) {
-    promptOpacity = data.background_opacity;
-    // applyTheme(data.theme);
-    applyBackground(localData.customBackground, data.background_opacity);
+    applyBackground(localData.customBackground, promptOpacity);
   } else {
-    promptOpacity = data.background_opacity;
-    // applyTheme(promptTheme);
     applyBackground(null, promptOpacity); // Apply default background
   }
-
-  //! Apply Cursor must be after applyTheme
-  // if (data.cursorStyle) {
-  //   applyCursorStyle(data.cursorStyle);
-  // } else {
-  //   applyCursorStyle('block'); // Apply default if nothing is saved
-  // }
 
   bgUploadInput.addEventListener('change', handleFileSelect);
 }
@@ -2882,8 +2844,8 @@ document.body.addEventListener("keydown", async e => {
     e.preventDefault();
     editorStatus.textContent = "Saving...";
     
-    const targetBookmarkNode = findChildByTitleFileOrDir(current.children || [], editorTitleInput.value) || {id: editingBookmarkId};
-    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(targetBookmarkNode.title || editorTitleInput.value);
+    // const targetBookmarkNode = findChildByTitleFileOrDir(current.children || [], editorTitleInput.value) || {id: editingBookmarkId};
+    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
     let updatePayload;
 
