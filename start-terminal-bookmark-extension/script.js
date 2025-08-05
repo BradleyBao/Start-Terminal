@@ -22,6 +22,10 @@ let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
 
+// Piping 
+let isPiping = false;
+let pipeBuffer = [];
+
 let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
 
 // Config Var 
@@ -66,7 +70,7 @@ let homeDirNode = null;
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.1";
+const PRIVACY_POLICY_VERSION = "1.2";
 const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
 
 // Some related links
@@ -2343,6 +2347,12 @@ async function ping_func(url, options) {
 
 // ! VERY IMPORTANT FUNCTION 
 function print(text, type = "info", allowHtml = false) {
+
+  if (isPiping) {
+    pipeBuffer.push(text);
+    return; // Divert output to the buffer and stop here.
+  }
+
   if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
     return; // If it doesn't match, simply don't print.
   }
@@ -2384,6 +2394,14 @@ function print(text, type = "info", allowHtml = false) {
 
 
 function printLine(text, type = "info", endLine = false) {
+
+  if (isPiping) {
+    // For printLine, we need to handle how it builds a line.
+    // For now, a simple push is sufficient. More complex logic can be added if needed.
+    pipeBuffer.push(text);
+    return;
+  }
+
   if (activeGrepPattern && !activeGrepPattern.test(textStr)) {
       return; // If it doesn't match, simply don't print.
   }
@@ -2549,15 +2567,6 @@ function expandVariables(input) {
 async function executePipeline(pipelineStr) {
     const pipedCommands = pipelineStr.split('|').map(c => c.trim());
 
-    const lastCommand = pipedCommands[pipedCommands.length - 1];
-    if (lastCommand.startsWith('grep ')) {
-        const grepPattern = lastCommand.substring(5).trim();
-        if (grepPattern) {
-            activeGrepPattern = new RegExp(grepPattern, 'i');
-            pipedCommands.pop(); // Remove grep from the list of commands to execute
-        }
-    }
-
     let previousOutput = null;
 
     for (let i = 0; i < pipedCommands.length; i++) {
@@ -2614,23 +2623,35 @@ async function executePipeline(pipelineStr) {
         const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
 
         if (action) {
-            const result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
+
+            let result;
+            if (!isLastInPipe) {
+                // If this is not the last command, turn on piping mode
+                isPiping = true;
+                pipeBuffer = [];
+            }
+
+            result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
             previousOutput = result;
 
-            if (isLastInPipe) {
-                
-                if (typeof result === 'string') {
-                    // Check if this single string result is the ls-grid block
-                    const isLsGrid = result.includes('class="ls-grid-container"');
-                    print(result, 'info', isLsGrid);
-                } else if (Array.isArray(result)) {
-                    // For each line in the array, check if it looks like HTML
-                    result.forEach(line => {
-                        const lineStr = String(line);
-                        // A simple heuristic: if it has tags, treat it as HTML.
-                        const allowHtmlOnThisLine = lineStr.includes('<') && lineStr.includes('>');
-                        print(lineStr, 'info', allowHtmlOnThisLine);
-                    });
+            if (isPiping) {
+                isPiping = false; // Turn off piping mode after the command runs
+                // Use the explicit return value if it exists (for ls, history, etc.),
+                // otherwise use what was captured from print() calls (for help, about, etc.).
+                previousOutput = Array.isArray(result) && result.length > 0 ? result : pipeBuffer;
+            } else {
+                // This is the last command, so we print its result.
+                if (result) {
+                    if (typeof result === 'string') {
+                        const isLsGrid = result.includes('class="ls-grid-container"');
+                        print(result, 'info', isLsGrid);
+                    } else if (Array.isArray(result)) {
+                        result.forEach(line => {
+                            const lineStr = String(line);
+                            const allowHtml = lineStr.includes('<') && lineStr.includes('>');
+                            print(lineStr, 'info', allowHtml);
+                        });
+                    }
                 }
             }
         } else {
