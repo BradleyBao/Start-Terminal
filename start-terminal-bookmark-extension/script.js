@@ -1,5 +1,5 @@
 // script.js
-
+const startTime = Date.now();
 const output = document.getElementById("output");
 const typedText = document.getElementById("typedText"); // This will show text before cursor OR full text with highlighted char
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
@@ -67,6 +67,9 @@ let full_path = null;
 
 // Function to add privacy policy version 
 const PRIVACY_POLICY_VERSION = "1.1";
+const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+
+const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -74,7 +77,19 @@ const PRIVACY_POLICY_VERSION = "1.1";
 
 let promptTheme = "default"; // Default theme
 let promptOpacity = .15; // Default opacity for the prompt
-let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+
+// let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=aesthetic";
+
+const start_terminal_ascii = [
+"   ______           __     ______              _           __",
+"  / __/ /____ _____/ /____/_  __/__ ______ _  (_)__  ___ _/ /",
+" _\\ \\/ __/ _ `/ __/ __/___// / / -_) __/  ' \\/ / _ \\/ _ `/ / ",
+"/___/\\__/\\_,_/_/  \\__/    /_/  \\__/_/ /_/_/_/_/_//_/\\_,_/_/  ",
+"                                                             "
+].join("\n");
+
+
 
 function get_fav(bookmarks) {
   root = bookmarks[0];
@@ -1859,7 +1874,66 @@ DESCRIPTION
     print("For more details on a command, type: man <command_name>", "hint");
     return ""; 
   },
+  about: (args, options) => {
+    const manifest = chrome.runtime.getManifest();
+
+    if (options.version || options.V || options.v) {
+        print(`Terminal Startup v${manifest.version}`);
+        print(`Privacy Policy Version v${PRIVACY_POLICY_VERSION}`);
+        return;
+    }
+
+    // ASCII Art Title
+    const titleArt = start_terminal_ascii.split('\n');
+
+    titleArt.forEach(line => print(line, 'highlight'));
+    // print(titleArt);
+    print(""); // Spacer
+
+    // Gather all details into an array of objects
+    const details = [
+        { label: "Version", value: manifest.version },
+        { label: "Author", value: manifest.author },
+        { label: "License", value: "MIT License" }, // You can change this if you use a different license
+        { label: "Homepage", value: manifest.homepage_url },
+        { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
+        { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
+        { label: "Privacy Policy Version", value: `v${PRIVACY_POLICY_VERSION}` },
+        { label: "User", value: user || "guest" },
+        { label: "Uptime", value: formatUptime(Date.now() - startTime) },
+        { label: "Browser", value: `${BROWSER_TYPE}` },
+        { label: "Language", value: navigator.language },
+    ];
+
+    // Calculate the longest label for alignment
+    const longestLabel = details.reduce((max, item) => Math.max(max, getVisualWidth(item.label)), 0);
+
+    // Print each detail in a formatted key-value pair
+    details.forEach(item => {
+        const padding = ' '.repeat(longestLabel - getVisualWidth(item.label));
+        const line = `<span class="output-folder">${item.label}${padding}</span> : ${item.value}`;
+        print(line, 'info', true);
+    });
+
+    return ""; // Return nothing to avoid an extra blank line from the engine
+  },
 };
+
+/**
+ * Formats a duration in milliseconds to a human-readable string (e.g., "1m 23s").
+ * @param {number} ms - The duration in milliseconds.
+ * @returns {string} The formatted uptime string.
+ */
+function formatUptime(ms) {
+    if (ms < 1000) return `${ms}ms`;
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    let result = '';
+    if (minutes > 0) result += `${minutes}m `;
+    result += `${seconds}s`;
+    return result;
+}
 
 /**
  * Recursively finds a node by its ID within a given tree.
@@ -2751,7 +2825,7 @@ async function refreshMicrosoftToken(refreshToken) {
 function showPrivacyUpdateNotice() {
     print("Our Privacy Policy has been updated.", "highlight");
     // print("Please review the changes at: ")
-    print("Please review the changes at: https://www.tianyibrad.com/docs/start_terminal_privacy_policy.", "info");
+    print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
     print("Type 'privacy-ok' to dismiss this message.", "hint");
     print("");
 }
@@ -3949,7 +4023,7 @@ function checkForUpdates() {
 
 async function applyUpdates() {
   let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y/n] ");
-  print(`Extension needs to be reloaded to update, reload now? [Y|n] ${user_input_content}`)
+  print(`Extension needs to be reloaded to update, reload now? [Y/n] ${user_input_content}`)
   if (result) {
     chrome.runtime.onUpdateAvailable.addListener((details) => {
       print(`Fetched: ${details.version}`, 'info');
