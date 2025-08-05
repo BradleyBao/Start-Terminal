@@ -69,7 +69,11 @@ let full_path = null;
 const PRIVACY_POLICY_VERSION = "1.1";
 const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
 
+// Some related links
 const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
+const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
+const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
+const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -1815,60 +1819,66 @@ DESCRIPTION
     print("");
 
     print("Search Commands", "highlight");
-    print("  google <query> [-b]   - Search with Google.");
-    print("  bing <query> [-b]     - Search with Bing.");
-    print("  baidu <query> [-b]    - Search with Baidu.");
-    print("  yt <query> [-b]       - Search with YouTube.");
-    print("  bilibili <query> [-b] - Search with Bilibili.");
-    print("  spotify <query> [-b]  - Search with Spotify.");
+    print("  google, bing, baidu, yt, ...  - Search on a specific engine.");
+    print("  default <engine|on|off>       - Manage the default search behavior.");
     print("");
     
     print("Navigation & Bookmarks", "highlight");
-    print("  ls [-l]               - List bookmarks in current directory.");
-    print("  cd <folder>           - Change directory to a bookmark folder.");
-    print("  cd ..                 - Go to parent directory.");
-    print("  pwd                   - Show current bookmark path.");
-    print("  goto <url> [-b]       - Navigate to a specific URL.");
-    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
+    print("  ls [-la]                      - List bookmarks in the current directory.");
+    print("  cd <folder>                   - Change directory.");
+    print("  pwd                           - Show current bookmark path.");
+    print("  goto <url> [-b]               - Navigate to a specific URL.");
+    print("  tree                          - Display the directory tree structure.");
+    print("  ./<bookmark_name>             - Open a bookmark in the current directory.");
     print("");
 
     print("File & Directory Operations", "highlight");
-    print("  mkdir <folder>        - Create a new bookmark folder.");
-    print("  touch <file>          - Create a new, empty bookmark.");
-    print("  mv <src> <dest>       - Move or rename a bookmark/folder.");
-    print("  cp [-r] <src> <dest>  - Copy a bookmark or folder.");
-    print("  rm [-r] <name>        - Remove a bookmark or folder.");
-    print("  rmdir <folder>        - Remove an empty bookmark folder.");
-    print("  find [-name <pat>]    - Find bookmarks/folders by name.");
-    print("  nano <file>           - Edit a bookmark.");
-    print("  editlink <file>       - Update a bookmark's url.");
-    print("");
-
-    print("Browser & System Control", "highlight"); // <-- NEW SECTION
-    print("  tabs <ls|close|switch> - Manage browser tabs.");
-    print("  downloads <ls>        - List recent downloads.");
-    print("  wget <url>            - Download a file from a URL.");
-    print("  ping <host>           - Ping a host.");
-    print("  date                  - Show current date and time.");
-    print("  clear (or cls)        - Clear the terminal screen.");
-    print("  locale                - Show browser language settings.");
-    print("");
-
-    print("Shell, Environment & History", "highlight"); // <-- NEW SECTION
-    print("  export VAR=value      - Set an environment variable.");
-    print("  unset <VAR_NAME>      - Unset (delete) an environment variable.");
-    print("  env                   - Display environment variables.");
-    print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
-    print("  history               - Show command history.");
-    print("  alias [name='cmd']    - Create or list command aliases.");
-    print("  unalias <name>        - Remove an alias.");
+    print("  mkdir <folder>                - Create a new bookmark folder.");
+    print("  touch <file>                  - Create a new, empty bookmark.");
+    print("  mv <src> <dest>               - Move or rename a bookmark/folder.");
+    print("  cp [-r] <src> <dest>          - Copy a bookmark or folder.");
+    print("  rm [-r] <name>                - Remove a bookmark or folder.");
+    print("  rmdir <folder>                - Remove an empty bookmark folder.");
+    print("  find <path> -name <pattern>   - Find bookmarks/folders by name.");
+    print("  cat <bookmark>                - Display details of a bookmark.");
     print("");
     
-    print("Account & Customization", "highlight");
-    print("  mslogin / mslogout    - Log in/out with a Microsoft account.");
-    print("  theme <name>          - Change terminal theme.");
-    print("  uploadbg / setbg      - Manage custom background.");
-    print("  man <command>         - Show the manual page for a command.");
+    print("Editors", "highlight");
+    print("  nano <file>                   - Edit a bookmark or setting file with a simple editor.");
+    print("  vim <file>                    - Edit a bookmark's raw data with a Vim-like editor.");
+    print("");
+
+    print("Browser & System Control", "highlight");
+    print("  tabs <ls|close|switch>        - Manage browser tabs.");
+    print("  downloads <ls>                - List recent downloads.");
+    print("  wget <url>                    - Download a file from a URL.");
+    print("  ping <host>                   - Ping a host.");
+    print("  date                          - Show current date and time.");
+    print("  clear (or cls)                - Clear the terminal screen.");
+    print("");
+
+    print("Shell, Environment & History", "highlight");
+
+    print("  export VAR=value              - Set an environment variable.");
+    print("  unset <VAR_NAME>              - Unset an environment variable.");
+    print("  env                           - Display environment variables.");
+    print("  grep <pattern>                - Filter piped input.");
+    print("  history                       - Show command history.");
+    print("  alias [name='cmd']            - Create or list command aliases.");
+    print("  unalias <name>                - Remove an alias.");
+    print("");
+    
+    print("Account, Customization & Meta", "highlight");
+    print("  mslogin / mslogout            - Log in/out with a Microsoft account.");
+    print("  theme <name>                  - Change terminal theme.");
+    print("  cursor <style>                - Change cursor style (block, bar, underline).");
+    print("  uploadbg / setbg              - Manage custom background.");
+    print("  setbgAPI <url>                - Set the random background image API URL.");
+    print("  config <setup|sync|...>       - Manage how and where settings are stored.");
+    print("  apt <update|upgrade>          - Check for or apply extension updates.");
+    print("  about [-V]                    - Show details about this extension.");
+    print("  feedback                      - Provide feedback or rate the extension.");
+    print("  man <command>                 - Show the manual page for a command.");
     print("");
 
     print("For more details on a command, type: man <command_name>", "hint");
@@ -1898,7 +1908,7 @@ DESCRIPTION
         { label: "Homepage", value: manifest.homepage_url },
         { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
         { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
-        { label: "Privacy Policy Version", value: `v${PRIVACY_POLICY_VERSION}` },
+        { label: "Privacy Policy Version", value: PRIVACY_POLICY_VERSION },
         { label: "User", value: user || "guest" },
         { label: "Uptime", value: formatUptime(Date.now() - startTime) },
         { label: "Browser", value: `${BROWSER_TYPE}` },
@@ -1917,6 +1927,35 @@ DESCRIPTION
 
     return ""; // Return nothing to avoid an extra blank line from the engine
   },
+  feedback: async () => {
+    print("How can we help?", "highlight");
+    print("");
+    print("[1] Rate The Extension");
+    print("[2] Feedback");
+    print("[3] Report a Bug or Suggest a Feature");
+    print("");
+
+    // Use the existing userInputMode to get the user's choice
+    const choice = await userInputMode("Enter a number (or press any other key to cancel): ");
+    
+    // The user input content is stored in the global `user_input_content` variable
+    // We need to echo it back so the user sees what they typed.
+    print(`Enter a number (or press any other key to cancel): ${user_input_content}`);
+
+    if (user_input_content === '1') {
+        print("Opening the Add-on store page...", "info");
+        window.open(STORE_URL, '_blank');
+    }else if (user_input_content === '2') {
+        print("Opening the feedback form...", "info");
+        window.open(FEEDBACK, '_blank');
+    } else if (user_input_content === '3') {
+        print("Opening the reporting form...", "info");
+        window.open(REPORT, '_blank');
+    } else {
+        print("Operation cancelled.", "warning");
+    }
+    return;
+},
 };
 
 /**
@@ -2126,7 +2165,6 @@ function setupVimEditor(args) {
     textarea.style.display = 'block';
     textarea.readOnly = true;
 
-    // ★★★ THE FIX: Use the full bookmark object to display ALL properties ★★★
     // We use JSON.parse(JSON.stringify(...)) to get a clean, serializable copy of the object.
     const fullBookmarkData = JSON.parse(JSON.stringify(target));
     
@@ -3911,6 +3949,7 @@ function welcomeMsg() {
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
+    print("Type 'about' for more information about start-terminal.");
     print("");
     print("Default Search Engine:");
     print(`  - Current: ${default_search_engine}`, "highlight");
