@@ -920,8 +920,10 @@ DESCRIPTION
                 saveCurrentPath();
             } else if (result && result.node && !result.node.children) {
                  print(`cd: ${targetPath}: Not a directory`, "error");
+                 return false;
             } else {
                 print(`cd: ${targetPath}: No such file or directory`, "error");
+                return false;
             }
         }
         update_user_path();
@@ -946,7 +948,8 @@ DESCRIPTION
         const dirName = args.join(" ");
         if (findChildByTitle(current.children || [], dirName)) {
             print(`mkdir: cannot create directory '${dirName}': File exists`);
-            return resolve();
+            resolve(false);
+            return resolve(false);
         }
         chrome.bookmarks.create({ parentId: current.id, title: dirName }, async (newFolder) => {
             if (chrome.runtime.lastError) {
@@ -976,6 +979,7 @@ DESCRIPTION
         if (!target) {
             if (options.f) return resolve();
             print(`rm: cannot remove '${targetName}': No such file or directory`);
+            resolve(false);
             return resolve();
         }
         const isDirectory = !!target.children;
@@ -1018,13 +1022,19 @@ DESCRIPTION
     const dirName = args.join(" ");
     const target = findChildByTitleFileOrDir(current.children || [], dirName);
     if (!target) {
-        print(`rmdir: failed to remove '${dirName}': No such directory`); return resolve();
+        print(`rmdir: failed to remove '${dirName}': No such directory`); 
+        resolve(false);
+        return resolve();
     }
     if (!target.children) {
-        print(`rmdir: failed to remove '${dirName}': Not a directory`); return resolve();
+        print(`rmdir: failed to remove '${dirName}': Not a directory`); 
+        resolve(false);
+        return resolve();
     }
     if (target.children.length > 0) {
-        print(`rmdir: failed to remove '${dirName}': Directory not empty`); return resolve();
+        print(`rmdir: failed to remove '${dirName}': Directory not empty`); 
+        resolve(false);
+        return resolve();
     }
     chrome.bookmarks.remove(target.id, async () => {
         if (chrome.runtime.lastError) {
@@ -1963,6 +1973,27 @@ DESCRIPTION
 };
 
 /**
+ * Tokenizes a command line into segments based on logical operators.
+ * @param {string} line - The full input line.
+ * @returns {Array<object>} An array of command objects, e.g., [{ command: "cmd1", separator: "&&" }, ...]
+ */
+function tokenizeLine(line) {
+    const regex = /(\s*&&\s*|\s*\|\|\s*|\s*;\s*)/g;
+    const parts = line.split(regex);
+    
+    const tokens = [];
+    for (let i = 0; i < parts.length; i += 2) {
+        const command = parts[i].trim();
+        // The separator is what FOLLOWS the command. The last command has no explicit separator.
+        const separator = (parts[i + 1] || null)?.trim();
+        if (command) {
+            tokens.push({ command, separator });
+        }
+    }
+    return tokens;
+}
+
+/**
  * Formats a duration in milliseconds to a human-readable string (e.g., "1m 23s").
  * @param {number} ms - The duration in milliseconds.
  * @returns {string} The formatted uptime string.
@@ -2721,23 +2752,55 @@ function handleSudoCheck(originalCommandStr) {
 }
 
 async function executeLine(line) {
-    const commandSegments = line.split(';').filter(cmd => cmd.trim() !== '');
-    
     if (line.trim() === "") {
         print(`${full_path} `);
         print("");
         return;
     }
     
-    print(`${full_path} ${line}`); // Echo the full line once
+    print(`${full_path} ${line}`);
+
+    const commandTokens = tokenizeLine(line);
+    let lastCommandSuccess = true;
 
     awaiting();
-    for (const segment of commandSegments) {
-        await executePipeline(segment);
+
+    for (const token of commandTokens) {
+        
+        // --- Decision Block: Decide whether to run the current command ---
+        if (lastCommandSuccess) {
+            // If the PREVIOUS command succeeded...
+            // We run the current command. The only exception is if the previous separator was '||',
+            // in which case the OR chain has already succeeded, so we start skipping.
+            if (token.previousSeparator === '&&') {
+                lastCommandSuccess = true; // The success of the OR chain carries forward
+                continue; // Skip this command
+            }
+        } else { // if lastCommandSuccess is false
+            // If the PREVIOUS command failed...
+            // We run the current command UNLESS the previous separator was '&&'.
+            if (token.previousSeparator === '||') {
+                lastCommandSuccess = false; // The failure of the AND chain carries forward
+                continue; // Skip this command
+            }
+        }
+        
+        // --- Execution ---
+        // If we passed the checks above, we are cleared to run.
+        let result = await executePipeline(token.command);
+        lastCommandSuccess = (result !== false);
+        
+        // Pass the separator of the command we just ran to the next token in the list.
+        const nextTokenIndex = commandTokens.indexOf(token) + 1;
+        if (commandTokens[nextTokenIndex]) {
+            commandTokens[nextTokenIndex].previousSeparator = token.separator;
+        }
     }
-    if (!commanding) { // If no async command like wget is running
-        done();
-        print("");
+    
+    // After the entire sequence is finished (or skipped), restore the prompt.
+    if (!commanding) {
+      done();
+      print("");
     }
 }
 
@@ -2816,6 +2879,7 @@ function done() {
     setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
   }
   blockCursor.classList.remove('no-blink'); // Re-enable blinking
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
 // SETTINGS 
