@@ -458,7 +458,6 @@ function linkify(text) {
     return { html, linksFound };
 }
 
-// Function to update the input display (typedText and blockCursor)
 function updateInputDisplay() {
   if (isComposing) {
     blockCursor.style.display = "none";
@@ -485,6 +484,90 @@ function updateInputDisplay() {
   // Only set caret if typedText was focused or body (implying typedText should be focused)
   if (typedTextIsFocused || currentActiveElement === document.body ) {
       setCaretAtOffset(typedText, cursorPosition);
+  }
+}
+
+// Function to update the input display (typedText and blockCursor)
+function updateInputDisplayHighlight() {
+  if (isComposing) {
+    blockCursor.style.display = "none";
+    return;
+  }
+
+  let html = '';
+  let bufferIndex = 0;
+
+  // 内部辅助函数，用于处理一小块文本，并正确插入光标下的高亮字符
+  const processChunk = (text, className = '') => {
+    let chunkHtml = '';
+    for (const char of text) {
+      if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
+        // 如果当前字符索引等于光标位置，则用高亮span包裹
+        chunkHtml += `<span class="highlighted-char">${escapeHtml(char)}</span>`;
+      } else {
+        chunkHtml += escapeHtml(char);
+      }
+      bufferIndex++;
+    }
+    // 如果有CSS类名，用相应的span包裹整个块
+    if (className) {
+      return `<span class="${className}">${chunkHtml}</span>`;
+    }
+    return chunkHtml;
+  };
+
+  // 1. 首先处理注释：#号及其之后的所有内容
+  const commentIndex = buffer.indexOf('#');
+  let commandPart = buffer;
+  let commentPart = '';
+
+  if (commentIndex !== -1) {
+    commandPart = buffer.substring(0, commentIndex);
+    commentPart = buffer.substring(commentIndex);
+  }
+
+  // 2. 将命令部分分解成令牌（单词和空格）并处理
+  const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+  let commandFound = false;
+
+  for (const token of tokens) {
+    if (/^\s+$/.test(token)) { // 如果是空格
+      html += processChunk(token);
+    } else { // 如果是单词
+      if (!commandFound) {
+        // 第一个单词是命令
+        html += processChunk(token, 'cmd-highlight');
+        commandFound = true;
+      } else if (token.startsWith('-')) {
+        // 以'-'开头的是选项
+        html += processChunk(token, 'comment-highlight');
+      } else {
+        // 其他都是参数
+        html += processChunk(token);
+      }
+    }
+  }
+
+  // 3. 处理注释部分
+  if (commentPart) {
+    html += processChunk(commentPart, 'comment-highlight');
+  }
+
+  // 4. 更新DOM
+  typedText.innerHTML = html;
+
+  // 5. 控制行尾闪烁光标的显示
+  if (cursorPosition === buffer.length) {
+    blockCursor.style.display = "inline-block";
+  } else {
+    blockCursor.style.display = "none";
+  }
+
+  // 6. 恢复浏览器内部的光标位置以保证输入法（IME）的正常工作
+  const currentActiveElement = document.activeElement;
+  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+  if (typedTextIsFocused || currentActiveElement === document.body) {
+    setCaretAtOffset(typedText, cursorPosition);
   }
 }
 
@@ -838,6 +921,37 @@ SYNOPSIS
 DESCRIPTION
   Clears all previous output from the terminal screen.`
   },
+  welcome: {
+    exec: async () => {
+      const manifest = chrome.runtime.getManifest();
+      print(`Terminal Startup v${manifest.version} - ${detectBrowser()}`);
+      print("Author: Tian Yi, Bao");
+      print("");
+      print("Type 'help' for a list of commands.");
+      print("Type 'about' for more information about start-terminal.");
+      print("");
+      print("Default Search Engine:");
+      print(`  - Current: ${default_search_engine}`, "highlight");
+      print(`  - Current default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
+      print("  - Supported: google, bing, baidu");
+      print("  - Change with: default <search engine|on|off>", "hint");
+      print("");
+
+      // 检查并显示隐私政策更新
+      // const data = await new Promise(resolve => chrome.storage.sync.get('privacyPolicyVersion', resolve));
+      // if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+      //   print("Our Privacy Policy has been updated.", "highlight");
+      //   print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
+      //   print("Type 'privacy-ok' to dismiss this message.", "hint");
+      //   print("");
+      // }
+    },
+    manual: `NAME
+  welcome - display the welcome message and version information.
+
+SYNOPSIS
+  welcome`
+  },
   cursor: (args) => {
     const supportedStyles = ['block', 'bar', 'underline'];
     const style = args[0];
@@ -1111,149 +1225,122 @@ AVAILABLE THEMES
   default, ubuntu, powershell, cmd, kali, debian`
   },
 
+  // script.js
+
   config: {
     exec: async (args) => {
-    const subCommand = args.shift() || 'status';
+      const subCommand = args.shift() || 'status';
+      const mode = args[0];
 
-    // Helper function for migration logic to avoid repetition
-    const migrateToBookmarks = async () => {
-        print("Migrating settings from storage to bookmarks...");
-        for (const key of CONFIG_KEYS) {
-            const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
-            let valueToWrite = storageData[key];
-
-            // ★★★ FIX IS HERE ★★★
-            // If the value is missing from storage, create a default value.
-            if (valueToWrite === undefined) {
-                print(`'${key}' not found in storage, creating default bookmark...`, "hint");
-                switch (key) {
-                    case 'aliases':
-                    case 'environmentVars':
-                        valueToWrite = {};
-                        break;
-                    case 'settings':
-                        valueToWrite = { default_mode: default_mode, default_search_engine: default_search_engine };
-                        break;
-                    case 'theme':
-                        valueToWrite = promptTheme || 'default';
-                        break;
-                    case 'cursorStyle':
-                        valueToWrite = cursorStyle || 'block';
-                        break;
-                    default:
-                        valueToWrite = null; // Don't write unknown keys
-                }
-            }
-            
-            if (valueToWrite !== null) {
-                await writeSettingToBookmark(key, valueToWrite);
-            }
-        }
-        print("Migration complete.", "success");
-    };
-
-
-    switch (subCommand) {
+      switch (subCommand) {
         case 'setup':
-            const mode = args[0];
-            if (mode !== 'bookmark' && mode !== 'storage') {
-                print("Usage: config setup <bookmark|storage>", "error");
-                return;
+          if (!['storage', 'bookmark', 'startrc'].includes(mode)) {
+            print("Usage: config setup <storage|bookmark|startrc>", "error");
+            return;
+          }
+
+          if (mode === 'startrc') {
+            // --- 全新的 .startrc 设置流程 ---
+            print("Setting up .startrc configuration mode...", "highlight");
+            let imported = false;
+
+            // 1. 检查并询问是否从 .settings 文件夹导入
+            const settingsFolder = await getOrCreateSettingsFolder();
+            if (settingsFolder) {
+              const confirmImportBookmark = await userInputMode("Found legacy '.settings' folder. Import from it? [Y/n] ");
+              print(`Found legacy '.settings' folder. Import from it? [Y/n] ${user_input_content}`);
+
+              if (user_input_content) {
+                const settingsToImport = {};
+                for (const key of CONFIG_KEYS) {
+                  settingsToImport[key] = await readSettingFromBookmark(key);
+                }
+                const startrcContent = generateStartrcContent(settingsToImport);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from .settings and created ~/.startrc.", "success");
+                
+                const confirmDelete = await userInputMode("Delete the old '.settings' folder? [Y/n] ");
+                print(`Delete the old '.settings' folder? [Y/n] ${user_input_content}`);
+                if (user_input_content) {
+                  await new Promise(resolve => chrome.bookmarks.removeTree(settingsFolder.id, resolve));
+                  print("'.settings' folder removed.", "success");
+                }
+                imported = true;
+              }
             }
 
-            if (mode === 'bookmark') {
-                let settingsFolder = await getOrCreateSettingsFolder(false);
-                if (settingsFolder) {
-                    print("'.settings' folder already exists.", "warning");
-                    let replace = await userInputMode("Replace settings in bookmark with settings from storage? [Y/n] ");
-                    print(`Replace settings in bookmark with settings from storage? [Y/n] ${user_input_content}`)
-                    if (replace) {
-                        await migrateToBookmarks();
-                    } else {
-                        print("Keeping existing bookmark settings.", "info");
-                    }
-                } else {
-                    let confirm = await userInputMode("This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ");
-                    print(`This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ${user_input_content}`)
-                    if (confirm) {
-                        await getOrCreateSettingsFolder(true); // Ensure folder is created before migration
-                        await migrateToBookmarks();
-                    } else {
-                        print("Setup aborted by user.", "info");
-                        return;
-                    }
-                }
+            // 2. 如果未从书签导入，则询问是否从 storage 导入
+            if (!imported) {
+              const confirmImportStorage = await userInputMode("Import settings from browser storage? [Y/n] ");
+              print(`Import settings from browser storage? [Y/n] ${user_input_content}`);
+
+              if (user_input_content) {
+                const data = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+                const startrcContent = generateStartrcContent(data);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from storage and created ~/.startrc.", "success");
+                imported = true;
+              }
             }
             
-            configMode = mode;
-            await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
-            print(`Configuration mode set to: ${configMode}`, "success");
-            break;
-
-        case 'sync':
-            awaiting();
-            if (configMode === 'storage') {
-                print("Syncing: Bookmarks -> Storage not implemented yet. Switch to bookmark mode to sync from storage.", "warning");
-                // The logic for Bookmarks -> Storage would be more complex
-                // as it involves reading all bookmark files and setting them in storage.
-            } else { // configMode === 'bookmark'
-                await migrateToBookmarks();
+            // 3. 如果都未导入，则创建默认文件
+            if (!imported) {
+                const confirmCreateDefault = await userInputMode("Create a default .startrc file? [Y/n] ");
+                print(`Create a default .startrc file? [Y/n] ${user_input_content}`);
+                if (user_input_content) {
+                  await createOrUpdateStartrcFile(); // 不传参数，使用默认值
+                  print("Created default ~/.startrc file.", "success");
+                }
             }
-            done();
-            break;
+            print("\nHint: You can now edit the config with: nano .startrc", "hint");
 
-        case 'autosync':
-            autosyncEnabled = !autosyncEnabled;
-            await new Promise(resolve => chrome.storage.sync.set({ autosyncEnabled: autosyncEnabled }, resolve));
-            print(`Autosync is now ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}.`, "success");
-            if (autosyncEnabled) {
-                print("Changes will now be saved to both backends automatically.", "hint");
-            }
-            break;
-
+          } else {
+             print(`Warning: '${mode}' mode is considered legacy. '.startrc' mode is recommended.`, 'warning');
+          }
+          configMode = mode;
+          await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
+          print(`Configuration mode set to: ${configMode}`, "success");
+          break;
+        
+        // ... 其他 case 保持不变 ...
         case 'status':
         default:
-            print("--- Configuration Status ---", "highlight");
-            print(`Current Mode: ${configMode}`);
-            print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
-            print("\nAvailable commands:", "hint");
-            print("  config setup <bookmark|storage> - Set the primary settings backend.");
-            print("  config sync                     - Sync settings from storage to bookmarks.");
-            print("  config autosync                 - Toggle auto-syncing on changes.");
-            break;
+          print("--- Configuration Status ---", "highlight");
+          print(`Current Mode: ${configMode}`);
+          print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
+          print("\nAvailable modes: 'storage', 'bookmark', 'startrc' (recommended)", "hint");
+          print("  config setup <mode> - Set the primary settings backend.");
+          break;
       }
     },
+    // ... suggestions 和 manual 部分保持不变 ...
     suggestions: (args) => {
-        const subCommand = args[0];
-        if (args.length <= 1) {
-            return ['setup', 'sync', 'autosync', 'status'];
-        }
-        if (subCommand === 'setup' && args.length <= 2) {
-            return ['bookmark', 'storage'];
-        }
-        return [];
+      const subCommand = args[0];
+      if (args.length <= 1) {
+        return ['setup', 'sync', 'autosync', 'status'];
+      }
+      if (subCommand === 'setup' && args.length <= 2) {
+        return ['startrc', 'storage', 'bookmark'];
+      }
+      return [];
     },
     manual: `NAME
   config - manage terminal configuration
 
 SYNOPSIS
-  config [setup <mode> | sync | autosync | status]
+  config [setup <mode> | status]
 
 DESCRIPTION
   Manages how and where terminal settings are stored.
 
-  setup <bookmark|storage>
-    Sets the primary settings backend. 'storage' is the browser's sync storage. 'bookmark' uses a hidden ~/.settings folder in your bookmarks bar, allowing for manual editing.
-
-  sync
-    In bookmark mode, this command pulls all settings from browser storage and writes them to the ~/.settings folder, creating default files if they don't exist.
-
-  autosync
-    Toggles automatic synchronization. When enabled, settings are written to both backends simultaneously.
+  setup <startrc|storage|bookmark>
+    Sets the primary settings backend.
+    'startrc' (Recommended): Executes a ~/.startrc file on startup for maximum flexibility.
+    'storage' (Legacy): Uses the browser's sync storage.
+    'bookmark' (Legacy): Uses a hidden ~/.settings folder in your bookmarks bar.
 
   status
-    Displays the current configuration mode and autosync status.`
-    
+    Displays the current configuration mode.`
   },
 
   uploadbg: () => {
@@ -1922,7 +2009,8 @@ DESCRIPTION
     print("For more details on a command, type: man <command_name>", "hint");
     return ""; 
   },
-  about: (args, options) => {
+  about: {
+    exec: async (args, options) => {
     const manifest = chrome.runtime.getManifest();
 
     if (options.version || options.V || options.v) {
@@ -2006,6 +2094,7 @@ DESCRIPTION
     }
     return;
 },
+}
 };
 
 /**
@@ -2173,44 +2262,62 @@ function findNodeByPath(pathStr) {
 // Alias 
 // commands.yt = commands.youtube;
 
+// script.js
+
 function setupNanoEditor(args) {
-    if (args.length === 0) return "Usage: nano <bookmark_name>";
+    if (args.length === 0) {
+        print("Usage: nano <bookmark_name>");
+        return;
+    }
     const bookmarkName = args.join(' ');
     const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
 
-    if (!target) return `nano: '${bookmarkName}': No such file.`;
-    if (target.children) return `nano: '${bookmarkName}': Is a directory.`;
+    if (!target) {
+        print(`nano: '${bookmarkName}': No such file.`);
+        return;
+    }
+    if (target.children) {
+        print(`nano: '${bookmarkName}': Is a directory.`);
+        return;
+    }
 
     isEditing = true;
     activeEditor = 'nano';
     editingBookmarkId = target.id;
-    editingBookmarkTitle = target.title; // ★★★ 新增：保存当前文件名 ★★★
+    editingBookmarkTitle = target.title;
     unsavedChanges = false;
     
+    // --- NANO .startrc 绿灯逻辑 ---
+    const isStartrcFile = editingBookmarkTitle === '.startrc';
     const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
     document.getElementById('nano-fields').style.display = 'none';
-    document.getElementById('editor-textarea').style.display = 'none';
-
-    if (isSettingsFile) {
-        const textarea = document.getElementById('editor-textarea');
+    const textarea = document.getElementById('editor-textarea');
+    textarea.style.display = 'block'; // 总是显示文本区域
+    textarea.readOnly = false;
+    
+    // 如果是 .startrc 或旧的配置文件，就从URL解码内容
+    if (isStartrcFile || isSettingsFile) {
         try {
-            const rawJson = decodeURIComponent(target.url.split('#')[1] || '');
-            const parsedJson = JSON.parse(rawJson);
-            textarea.value = JSON.stringify(parsedJson, null, 2);
+            const rawContent = decodeURIComponent(target.url.split('#')[1] || '');
+            // 如果是旧的设置文件，美化一下JSON，否则直接显示内容
+            textarea.value = isSettingsFile ? JSON.stringify(JSON.parse(rawContent), null, 2) : rawContent;
         } catch (e) {
-            textarea.value = "Error: Could not parse bookmark data. Saving will overwrite.";
+            textarea.value = `Error parsing file content: ${e.message}. Saving will overwrite.`;
         }
-        textarea.style.display = 'block';
-        textarea.readOnly = false;
-        setTimeout(() => textarea.focus(), 0);
     } else {
+        // 对于普通书签，隐藏文本区，显示标题和URL输入框
+        textarea.style.display = 'none';
         document.getElementById('nano-fields').style.display = 'block';
         editorTitleInput.value = target.title;
         editorUrlInput.value = target.url;
-        editorTitleInput.focus();
+        setTimeout(() => editorTitleInput.focus(), 0);
     }
     
+    if (textarea.style.display === 'block') {
+      setTimeout(() => textarea.focus(), 0);
+    }
+
     editorStatus.textContent = `Editing: ${target.title}`;
     document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save    <span class="editor-shortcut">^X</span> Exit`;
     
@@ -3159,48 +3266,259 @@ function showPrivacyUpdateNotice() {
 //   bgUploadInput.addEventListener('change', handleFileSelect);
 // }
 
-async function loadSettings() {
-  // 1. Get the complete bookmark tree asynchronously
-  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
-  const trueRoot = bookmarkTree[0];
-  
-  root = trueRoot; 
 
-  // Set the home directory '~' to be the "Favorites bar"
-  if (trueRoot.children && trueRoot.children.length > 0) {
-    homeDirNode = trueRoot.children[0];
-  } else {
-    homeDirNode = root; 
+// script.js
+
+/**
+ * 根据一个设置对象生成 .startrc 文件的内容字符串。
+ * @param {object} settings - 包含配置的对象 (e.g., { theme: 'ubuntu', aliases: {...} })
+ * @returns {string} - 格式化后的 .startrc 文件内容。
+ */
+function generateStartrcContent(settings) {
+  let content = "# Auto-generated .startrc from previous settings\n\n";
+
+  // 处理主题
+  if (settings.theme) {
+    content += `# Set the visual theme.\n`;
+    content += `theme ${settings.theme}\n\n`;
   }
 
+  // 处理光标样式
+  if (settings.cursorStyle) {
+    content += `# Set the cursor style.\n`;
+    content += `cursor ${settings.cursorStyle}\n\n`;
+  }
+
+  // 处理别名
+  if (settings.aliases && Object.keys(settings.aliases).length > 0) {
+    content += "# Command Aliases\n";
+    for (const name in settings.aliases) {
+      // 对包含空格的命令加引号
+      const command = settings.aliases[name];
+      content += `alias ${name}='${command}'\n`;
+    }
+    content += '\n';
+  }
+
+  // 处理环境变量
+  if (settings.environmentVars && Object.keys(settings.environmentVars).length > 0) {
+    content += "# Environment Variables\n";
+    for (const key in settings.environmentVars) {
+      const value = settings.environmentVars[key];
+      // 对包含空格的值加引号
+      content += `export ${key}="${value}"\n`;
+    }
+    content += '\n';
+  }
+  
+  // 添加欢迎消息
+  content += "# Welcome message\n";
+  content += "welcome\n\n";
+
+  content += "echo \"Settings imported. Welcome to the new .startrc mode!\"";
+  return content;
+}
+
+// script.js
+
+/**
+ * 创建或更新 ~/.startrc 文件。
+ * @param {string|null} content - 要写入文件的内容。如果为null，则使用默认内容。
+ */
+async function createOrUpdateStartrcFile(content = null) {
+  let fileContent = content;
+  if (fileContent === null) {
+    // 默认配置
+    fileContent = `
+# Welcome to your .startrc file!
+# This file is for configuring your terminal on startup.
+# Lines starting with # or // are comments.
+
+welcome
+
+# Set the visual theme. Supported: default, ubuntu, powershell, cmd, kali, debian
+theme ubuntu
+
+# Set the cursor style. Supported: block, bar, underline
+cursor bar
+
+# Define command aliases. Use quotes for commands with spaces.
+alias ll='ls -l -a'
+alias g='google'
+
+# Set environment variables. Quotes are optional for simple values.
+export GREETING="Hello from .startrc!"
+export EDITOR=nano
+
+# You can also print messages on startup.
+echo ".startrc loaded successfully."
+    `.trim();
+  }
+  
+  const existingRc = await findFileInHome('.startrc');
+  if (existingRc) {
+    await new Promise(resolve => chrome.bookmarks.remove(existingRc.id, resolve));
+  }
+  const dataUrl = `about:blank#${encodeURIComponent(fileContent)}`;
+  await new Promise(resolve => chrome.bookmarks.create({ parentId: homeDirNode.id, title: '.startrc', url: dataUrl }, resolve));
+}
+
+/**
+ * 解析并应用 .startrc 文件的配置。 (修复后版本)
+ * @param {string} scriptContent - 从 .startrc 文件读取的配置内容。
+ */
+async function parseAndApplyStartrc(scriptContent) {
+  const lines = scriptContent.split('\n');
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // --- 修复1: 同时支持 '#' 和 '//' 作为注释 ---
+    if (trimmedLine === '' || trimmedLine.startsWith('#') || trimmedLine.startsWith('//')) {
+      continue;
+    }
+
+    const tokens = trimmedLine.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    const command = tokens.shift();
+    const args = tokens; // args 现在是包含引号的完整参数
+
+    switch (command) {
+      case 'welcome':
+        await commands.welcome.exec(); // 调用 welcome 命令
+        break;
+
+      case 'about':
+        const options = {};
+        const aboutArgs = [];
+        args.forEach(arg => {
+          if (arg.startsWith('-')) { // 简单处理 -v, -V 这样的选项
+            for (const char of arg.substring(1)) options[char] = true;
+          } else {
+            aboutArgs.push(arg);
+          }
+        });
+        commands.about.exec(aboutArgs, options); // 调用 about 命令
+        break;
+
+      case 'theme':
+        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+        if (supportedThemes.includes(args[0])) {
+          applyTheme(args[0]);
+        } else {
+          print(`[.startrc] Invalid theme: '${args[0]}'`, 'error');
+        }
+        break;
+      
+      case 'cursor':
+        const supportedCursors = ['block', 'bar', 'underline'];
+        if (supportedCursors.includes(args[0])) {
+          applyCursorStyle(args[0]);
+        } else {
+          print(`[.startrc] Invalid cursor style: '${args[0]}'`, 'error');
+        }
+        break;
+
+      // --- 修复2: 改进 alias 和 export 的解析逻辑 ---
+      case 'alias':
+      case 'export':
+        const assignmentString = args.join(' ');
+        const match = assignmentString.match(/^([^=]+)=(.*)$/);
+        
+        if (match) {
+          const key = match[1];
+          // 去除值部分两端的引号
+          let value = match[2].trim().replace(/^['"]|['"]$/g, '');
+          
+          if (command === 'alias') {
+            aliases[key] = value;
+          } else {
+            environmentVars[key] = value;
+          }
+        } else {
+          print(`[.startrc] Invalid ${command} syntax: ${trimmedLine}`, 'error');
+        }
+        break;
+      
+      case 'echo':
+        // 去除参数两端的引号后打印
+        const echoMessage = args.map(arg => arg.replace(/^['"]|['"]$/g, '')).join(' ');
+        print(echoMessage);
+        break;
+
+      default:
+        print(`[.startrc] Unknown command: '${command}'`, 'error');
+        break;
+    }
+  }
+}
+
+/**
+ * 在主目录中查找一个文件（非文件夹）。
+ * @param {string} fileName - 要查找的文件名。
+ * @returns {object|null} 返回书签节点或 null。
+ */
+async function findFileInHome(fileName) {
+    if (!homeDirNode || !homeDirNode.children) {
+        const tree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+        if (tree && tree[0] && tree[0].children && tree[0].children[0]) {
+            homeDirNode = tree[0].children[0];
+        } else {
+            return null;
+        }
+    }
+    return (homeDirNode.children || []).find(child => child.title === fileName && !child.children);
+}
+
+async function loadSettings() {
+  // 1. 获取完整的书签树
+  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+  root = bookmarkTree[0];
+  homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
   current = homeDirNode;
   path = [root, homeDirNode];
 
-  // 2. Load configuration mode first
-  const configData = await chrome.storage.sync.get(['configMode', 'autosyncEnabled']);
-  configMode = configData.configMode || 'storage';
+  // 2. 首先加载配置模式
+  const configData = await new Promise(resolve => chrome.storage.sync.get(['configMode', 'autosyncEnabled'], resolve));
+  configMode = configData.configMode || 'storage'; // 默认为 'storage'
   autosyncEnabled = configData.autosyncEnabled || false;
 
-  // 3. Load all settings using the getSetting router, which respects configMode
-  aliases = await getSetting('aliases') || {};
-  environmentVars = await getSetting('environmentVars') || {};
-  promptTheme = await getSetting('theme') || 'default';
-  
-  const loadedSettings = await getSetting('settings');
-  if (loadedSettings) {
+  // 3. 根据配置模式执行不同的加载逻辑
+  if (configMode === 'startrc') {
+    // --- .startrc 模式加载逻辑 ---
+    const rcFile = await findFileInHome('.startrc');
+    if (rcFile && rcFile.url) {
+      try {
+        const scriptContent = decodeURIComponent(rcFile.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent); // <<< 调用新的解析器
+      } catch (e) {
+        print(`Error reading .startrc file: ${e.message}`, 'error');
+      }
+    } else {
+      print("Warning: .startrc file not found. Using default settings.", 'warning');
+      print("Hint: Run 'config setup startrc' to create one.", 'hint');
+    }
+    // 在.startrc模式下，设置一个默认值以防脚本未配置
+    applyTheme(promptTheme || 'default');
+    applyCursorStyle(cursorStyle || 'block');
+
+  } else {
+    // --- 旧模式 (storage/bookmark) 的加载逻辑 ---
+    aliases = await getSetting('aliases') || {};
+    environmentVars = await getSetting('environmentVars') || {};
+    promptTheme = await getSetting('theme') || 'default';
+    const loadedSettings = await getSetting('settings');
+    if (loadedSettings) {
       default_mode = loadedSettings.default_mode ?? false;
       default_search_engine = loadedSettings.default_search_engine ?? "google";
-  } else {
-      default_mode = false;
-      default_search_engine = "google";
+    }
+    const loadedCursorStyle = await getSetting('cursorStyle');
+    applyCursorStyle(loadedCursorStyle || 'block');
+    applyTheme(promptTheme);
   }
-  
-  const loadedCursorStyle = await getSetting('cursorStyle');
-  applyCursorStyle(loadedCursorStyle || 'block');
 
 
   // 4. Load other non-routable settings directly from storage
-  const data = await chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion']);
+  const data = await new Promise(resolve => chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion'], resolve));
   
   if (data.commandHistory) {
     previousCommands.push(...data.commandHistory);
@@ -3296,51 +3614,54 @@ document.body.addEventListener("keydown", async e => {
     if (activeEditor === 'nano') {
         // For nano, we only intercept our specific shortcuts.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-    e.preventDefault();
-    editorStatus.textContent = "Saving...";
-    
-    // const targetBookmarkNode = findChildByTitleFileOrDir(current.children || [], editorTitleInput.value) || {id: editingBookmarkId};
-    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
+      e.preventDefault();
+      editorStatus.textContent = "Saving...";
+      
+      const isStartrcFile = editingBookmarkTitle === '.startrc';
+      const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
-    let updatePayload;
+      let updatePayload;
 
-    if (isSettingsFile) {
-        // --- NEW SAVE LOGIC for settings files ---
+      // --- NANO .startrc 绿灯保存逻辑 ---
+      if (isStartrcFile) {
+        const content = document.getElementById('editor-textarea').value;
+        const dataUrl = `about:blank#${encodeURIComponent(content)}`;
+        updatePayload = { url: dataUrl }; // 只更新URL
+      
+      } else if (isSettingsFile) {
         const textarea = document.getElementById('editor-textarea');
         try {
-            // Validate JSON before saving
             const parsedJson = JSON.parse(textarea.value);
-            const stringifiedJson = JSON.stringify(parsedJson); // Minified for URL
+            const stringifiedJson = JSON.stringify(parsedJson);
             const dataUrl = `about:blank#${encodeURIComponent(stringifiedJson)}`;
-            updatePayload = { url: dataUrl }; // Only update the URL
+            updatePayload = { url: dataUrl };
         } catch (err) {
             editorStatus.textContent = `Error: Invalid JSON! ${err.message}`;
             return;
         }
-    } else {
-        // --- ORIGINAL SAVE LOGIC for regular bookmarks ---
-        updatePayload = {
-            title: editorTitleInput.value,
-            url: editorUrlInput.value
-        };
-    }
 
-    chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
-        if (chrome.runtime.lastError) {
-            editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
-        } else {
-            editorStatus.textContent = `Saved: ${updatedNode.title}`;
-            unsavedChanges = false;
-            // If title was changed, update nano's state
-            if (updatePayload.title) editorTitleInput.value = updatePayload.title;
-            editingBookmarkId = updatedNode.id; // Update ID in case it changes (rare)
-            
-            // Silently refresh the current directory's children
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) current = results[0];
-            });
-        }
-      });
+      } else {
+          // --- 原始保存逻辑 ---
+          updatePayload = {
+              title: editorTitleInput.value,
+              url: editorUrlInput.value
+          };
+      }
+
+      chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
+          if (chrome.runtime.lastError) {
+              editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+          } else {
+              editorStatus.textContent = `Saved: ${updatedNode.title}`;
+              unsavedChanges = false;
+              if (updatePayload.title) editorTitleInput.value = updatePayload.title;
+              editingBookmarkId = updatedNode.id;
+              
+              chrome.bookmarks.getSubTree(current.id, (results) => {
+                  if (results && results[0]) current = results[0];
+              });
+          }
+        });
     } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
             e.preventDefault();
             exitEditor();
@@ -4098,7 +4419,7 @@ window.onload = async () => {
   // typedText.focus() will be called by done() or click handler.
   updateCharacterWidth(); // Initial calculation
   await loadSettings(); // Load settings and user info
-  welcomeMsg();
+  // welcomeMsg();
   // updateInputDisplay(); // Called by done()
   done(); // Initial setup of prompt and input display
 };

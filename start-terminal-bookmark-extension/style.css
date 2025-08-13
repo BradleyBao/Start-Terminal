@@ -480,6 +480,15 @@ body.theme-cmd {
   white-space: nowrap;
 }
 
+.cmd-highlight {
+  color: var(--exec-color); /* 命令使用绿色 */
+  font-weight: bold;
+}
+
+.comment-highlight {
+  color: var(--placeholder-color); /* 选项和注释使用灰色提示色 */
+}
+
 ::selection {
   background-color: var(--selection-background);
   color: var(--selection-foreground);
