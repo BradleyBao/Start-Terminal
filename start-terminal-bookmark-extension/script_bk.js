@@ -1,5 +1,5 @@
 // script.js
-
+const startTime = Date.now();
 const output = document.getElementById("output");
 const typedText = document.getElementById("typedText"); // This will show text before cursor OR full text with highlighted char
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
@@ -22,11 +22,32 @@ let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
 
+// Piping 
+let isPiping = false;
+let pipeBuffer = [];
+
+let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
+
+// Config Var 
+let configMode = "storage"; // Storage or Bookmarks, storage by default
+let autosyncEnabled = false; // Control if two backends should be synced
+const SETTINGS_FOLDER_NAME = '.settings';
+const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle'];
+
+// Cursor style
+let cursorStyle = 'block'; // To track the current cursor style
+
 let activeGrepPattern = null;
 
 
 let isEditing = false; 
 let editingBookmarkId = null; 
+let editingBookmarkTitle = null;
+
+let activeEditor = null;
+let unsavedChanges = false;
+let vimMode = 'NORMAL';
+
 let outputHistory = [];
 
 let environmentVars = {};
@@ -44,11 +65,19 @@ const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
 let path = [];
+let homeDirNode = null;
 
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.1";
+const PRIVACY_POLICY_VERSION = "1.2";
+const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+
+// Some related links
+const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
+const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
+const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
+const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -56,7 +85,19 @@ const PRIVACY_POLICY_VERSION = "1.1";
 
 let promptTheme = "default"; // Default theme
 let promptOpacity = .15; // Default opacity for the prompt
-let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+
+// let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=aesthetic";
+
+const start_terminal_ascii = [
+"   ______           __     ______              _           __",
+"  / __/ /____ _____/ /____/_  __/__ ______ _  (_)__  ___ _/ /",
+" _\\ \\/ __/ _ `/ __/ __/___// / / -_) __/  ' \\/ / _ \\/ _ `/ / ",
+"/___/\\__/\\_,_/_/  \\__/    /_/  \\__/_/ /_/_/_/_/_//_/\\_,_/_/  ",
+"                                                             "
+].join("\n");
+
+
 
 function get_fav(bookmarks) {
   root = bookmarks[0];
@@ -67,11 +108,29 @@ function get_fav(bookmarks) {
 };
 
 function update_user_path() {
+  let displayPath;
+
+  // This first part, for handling paths inside the home directory, is correct.
+  if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+    if (path.length === 2) {
+      displayPath = "~";
+    } else {
+      displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
+    }
+  } else {
+    // --- THIS IS THE FIX ---
+    // For all other paths, build them from the root '/'
+    // We slice from 1 to ignore the main root node, which has no title.
+    const pathString = path.slice(1).map(p => p.title).join("/");
+    displayPath = "/" + pathString;
+  }
+
+  // The rest of the function remains the same.
   full_path = user;
   if (user !== "") {
     full_path += ": ";
   }
-  full_path += path.map(p => p.title || "~").join("/") || "/";
+  full_path += displayPath;
   full_path +=  " $";
   promptSymbol.textContent = full_path;
 }
@@ -471,6 +530,137 @@ function findChildByTitleFileOrDir(children, title) { // For general lookup (fil
   return children.find(child => child.title === title);
 }
 
+/**
+ * Query or Create .setting bookmark folder 
+ * @param {boolean} createIfMissing - if true, will create the folder if it doesn't exist
+ * @returns {Promise<object|null>} return bookmark node of the settings folder or null if failed
+ */
+async function getOrCreateSettingsFolder(createIfMissing = false) {
+    if (!homeDirNode) return null;
+    let settingsFolder = (homeDirNode.children || []).find(child => child.title === SETTINGS_FOLDER_NAME);
+
+    if (!settingsFolder && createIfMissing) {
+        try {
+            settingsFolder = await new Promise((resolve, reject) => {
+                chrome.bookmarks.create({ parentId: homeDirNode.id, title: SETTINGS_FOLDER_NAME }, (newNode) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(newNode);
+                });
+            });
+            // 创建后，需要刷新 homeDirNode 的子节点列表
+            const homeDirUpdate = await new Promise(resolve => chrome.bookmarks.getSubTree(homeDirNode.id, results => resolve(results[0])));
+            if (homeDirUpdate) homeDirNode = homeDirUpdate;
+
+        } catch (e) {
+            print(`Error creating .settings folder: ${e.message}`, "error");
+            return null;
+        }
+    }
+    return settingsFolder;
+}
+
+/**
+ * 从 .settings 书签中读取一个配置项
+ * @param {string} key - 配置项名称 (e.g., 'aliases')
+ * @returns {Promise<any|null>} 返回解析后的数据或 null
+ */
+async function readSettingFromBookmark(key) {
+    const settingsFolder = await getOrCreateSettingsFolder(false);
+    if (!settingsFolder) return null;
+
+    const configFile = (settingsFolder.children || []).find(child => child.title === key);
+    if (configFile && configFile.url) {
+        try {
+            // 数据存储在URL的 hash 部分
+            const rawJson = decodeURIComponent(configFile.url.split('#')[1] || '');
+            return JSON.parse(rawJson);
+        } catch (e) {
+            console.error(`Error parsing setting from bookmark: ${key}`, e);
+            return null;
+        }
+    }
+    return null;
+}
+
+/**
+ * 将一个配置项写入 .settings 书签
+ * @param {string} key - 配置项名称
+ * @param {any} value - 要写入的数据
+ * @returns {Promise<boolean>} 返回是否成功
+ */
+async function writeSettingToBookmark(key, value) {
+    const settingsFolder = await getOrCreateSettingsFolder(true);
+    if (!settingsFolder) return false;
+
+    const jsonValue = JSON.stringify(value, null, 2);
+    // 使用 about:blank#... 的形式来存储数据，更安全、更标准
+    const dataUrl = `about:blank#${encodeURIComponent(jsonValue)}`;
+
+    const configFile = (settingsFolder.children || []).find(child => child.title === key);
+    try {
+        if (configFile) {
+            await new Promise((resolve, reject) => {
+                chrome.bookmarks.update(configFile.id, { url: dataUrl }, (node) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(node);
+                });
+            });
+        } else {
+            await new Promise((resolve, reject) => {
+                chrome.bookmarks.create({ parentId: settingsFolder.id, title: key, url: dataUrl }, (node) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(node);
+                });
+            });
+        }
+        return true;
+    } catch (e) {
+        print(`Error writing setting to bookmark '${key}': ${e.message}`, "error");
+        return false;
+    }
+}
+
+/**
+ * 统一的配置读取"路由器"
+ * @param {string} key - 配置项名称
+ * @returns {Promise<any>}
+ */
+async function getSetting(key) {
+    if (configMode === 'bookmark') {
+        const bookmarkSetting = await readSettingFromBookmark(key);
+        // 如果书签模式下读取失败（可能文件不存在），则优雅地回退到 storage
+        if (bookmarkSetting !== null) {
+            return bookmarkSetting;
+        }
+        print(`[warn] bookmark config '${key}' missing, using stored defaults`, "warning");
+    }
+    
+    // 默认或回退都从 storage 读取
+    const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
+    return storageData[key];
+}
+
+/**
+ * 统一的配置写入"路由器"
+ * @param {string} key - 配置项名称
+ * @param {any} value - 要写入的数据
+ */
+async function setSetting(key, value) {
+    const primaryWrite = configMode === 'bookmark'
+        ? writeSettingToBookmark(key, value)
+        : new Promise(resolve => chrome.storage.sync.set({ [key]: value }, resolve));
+
+    await primaryWrite;
+
+    if (autosyncEnabled) {
+        // 如果启用了自动同步，则也写入到另一个后端
+        const secondaryWrite = configMode === 'bookmark'
+            ? new Promise(resolve => chrome.storage.sync.set({ [key]: value }, resolve))
+            : writeSettingToBookmark(key, value);
+        await secondaryWrite;
+    }
+}
+
 
 const commands = {
   google: (args, options) => {
@@ -598,235 +788,264 @@ const commands = {
     print(`${formattedDate}`);
     return " ";
   },
-  clear: (args, options) => {
-    clearOutput();
+  clear: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
-  cls: (args, options) => {
-    clearOutput();
+  cls: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
-  ls: (args, options, pipedInput) => {
-    // 1. Handle -l (long format)
-    if (options.l) {
-        if (!current || !current.children) return ["Error: current directory not available."];
-        return current.children.map(child => {
-            const owner = user || 'root';
-            const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
-            const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+  cursor: (args) => {
+    const supportedStyles = ['block', 'bar', 'underline'];
+    const style = args[0];
 
-            const typeChar = child.children ? "d" : "-";
-            const date = new Date(child.dateAdded || child.dateGroupModified || Date.now()).toLocaleString('sv-SE').substring(0, 16);
-            const typeClass = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
-            
-            const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
-            const title = `<span class="output-line-inline output-${typeClass}">${escapeHtml(child.title)}</span>`;
-            return perms + title;
-        });
+    if (!style) {
+        return `Current cursor style: ${cursorStyle}. Supported: ${supportedStyles.join(', ')}.`;
     }
 
-    // 2. Standard multi-column layout
-    if (!current || !current.children || current.children.length === 0) return [];
-    
-    const items = current.children.map(child => ({
-        title: child.title,
-        className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
-    })).sort((a, b) => a.title.localeCompare(b.title));
-
-    // ★★★ FIX 1: Calculate width dynamically based on the actual terminal element ★★★
-    const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
-    if (isNaN(terminalWidth) || terminalWidth <= 0) { // Fallback if calculation fails
-        return items.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
-    }
-
-    const longestItemWidth = items.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
-    const colWidth = longestItemWidth + 2;
-
-    let numCols = Math.floor(terminalWidth / colWidth);
-    if (numCols <= 1) { // Fallback to single column if it doesn't fit
-        return items.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
-    }
-    
-    // 4. Build multi-column HTML output
-    const numRows = Math.ceil(items.length / numCols);
-    const outputLines = [];
-
-    for (let row = 0; row < numRows; row++) {
-        let lineHtml = '';
-        for (let col = 0; col < numCols; col++) {
-            const index = row + col * numRows;
-            if (index < items.length) {
-                const item = items[index];
-                const title = escapeHtml(item.title);
-                const currentVisualWidth = getVisualWidth(item.title);
-                const paddingNeeded = colWidth - currentVisualWidth;
-                
-                // ★★★ FIX 2: Use non-breaking spaces (&nbsp;) for padding to prevent collapsing ★★★
-                const padding = '&nbsp;'.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
-                
-                lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
-            }
-        }
-        outputLines.push(lineHtml);
-    }
-    return outputLines;
-  },
-  cd: (args) => {
-    if (args.length === 0) {
-      return "Usage: cd <directory>";
-    }
-    const targetPath = args.join(' ');
-
-    if (targetPath === "..") {
-        if (path.length > 1) {
-            path.pop();
-            current = path[path.length - 1];
-            saveCurrentPath();
-        }
+    if (supportedStyles.includes(style)) {
+        applyCursorStyle(style);
+        // chrome.storage.sync.set({ cursorStyle: style }); // Save the setting
+        setSetting('cursorStyle', style);
+        return `Cursor style set to ${style}.`;
     } else {
-        const result = findNodeByPath(targetPath);
-        if (result && result.node) {
-            current = result.node;
-            path = result.newPathArray;
-            saveCurrentPath();
-        } else {
-            print(`cd: ${targetPath}: No such file or directory`, "error");
-        }
+        return `Error: Style '${style}' not supported. Use one of: ${supportedStyles.join(', ')}`;
     }
-    update_user_path();
   },
-  pwd: (args, options) => {
-    // We take the path array, ignore the first element (the root which has no title),
-    // map the rest to their titles, and join them with slashes.
-    // A single leading slash is added to represent the root directory.
-    const pathString = "/" + path.slice(1).map(p => p.title).join("/");
-    return pathString;
-  },
-  mkdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: mkdir <directory_name>");
-            return resolve();
-        }
-        const dirName = args.join(" ");
+  ls: {
+    exec: (args, options, pipedInput) => {
+        // 1. Get ALL real items from the current directory first.
+        let allItems = (current.children || []).map(child => ({
+            title: child.title,
+            node: child,
+            className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
+        }));
 
-        const existing = findChildByTitle(current.children || [], dirName);
-        if (existing) {
-            print(`mkdir: cannot create directory '${dirName}': File exists`);
-            return resolve();
+        // ★★★ NEW LOGIC: Filter items based on the '-a' option ★★★
+        // If '-a' is NOT present, filter out items that start with '.'
+        const itemsToDisplay = options.a 
+            ? allItems 
+            : allItems.filter(item => !item.title.startsWith('.'));
+        
+        // 3. Sort the filtered items alphabetically.
+        itemsToDisplay.sort((a, b) => a.title.localeCompare(b.title));
+
+        // 4. Proceed with the display logic using the correctly filtered list.
+        if (options.l) { // Handle -l (long format)
+            if (itemsToDisplay.length === 0) return [];
+            return itemsToDisplay.map(item => {
+                const owner = user || 'root';
+                const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const typeChar = item.node.children ? "d" : "-";
+                const date = new Date(item.node.dateAdded || item.node.dateGroupModified).toLocaleString('sv-SE').substring(0, 16);
+                const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
+                const title = `<span class="output-line-inline output-${item.className}">${escapeHtml(item.title)}</span>`;
+                return perms + title;
+            });
         }
 
-        chrome.bookmarks.create(
-            { parentId: current.id, title: dirName },
-            (newFolder) => {
-                if (chrome.runtime.lastError) {
-                    print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
-                    resolve();
-                  } else {
-                    print(`Directory '${newFolder.title}' created.`);
-                    chrome.bookmarks.getSubTree(current.id, (results) => {
-                        if (results && results[0]) {
-                            current = results[0];
-                            path[path.length - 1] = current;
-                        }
-                        resolve();
-                    });
+        // Standard multi-column layout
+        if (itemsToDisplay.length === 0) return [];
+        
+        const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+        if (isNaN(terminalWidth) || terminalWidth <= 0) {
+            return itemsToDisplay.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
+        }
+        const longestItemWidth = itemsToDisplay.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
+        const colWidth = longestItemWidth + 2;
+        let numCols = Math.floor(terminalWidth / colWidth);
+        if (numCols <= 1) {
+            return itemsToDisplay.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
+        }
+        const numRows = Math.ceil(itemsToDisplay.length / numCols);
+        const outputLines = [];
+        for (let row = 0; row < numRows; row++) {
+            let lineHtml = '';
+            for (let col = 0; col < numCols; col++) {
+                const index = row + col * numRows;
+                if (index < itemsToDisplay.length) {
+                    const item = itemsToDisplay[index];
+                    const title = escapeHtml(item.title);
+                    const currentVisualWidth = getVisualWidth(item.title);
+                    const paddingNeeded = colWidth - currentVisualWidth;
+                    const padding = ' '.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
+                    lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
                 }
             }
-        );
-    });
-  },
-  rm: (args, options) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rm [-r] [-f] <name>");
-            return resolve();
+            outputLines.push(lineHtml);
         }
+        return outputLines;
+    },
+    manual: "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l] [-a]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.\n  -a\tdo not ignore entries starting with ."
+  },
+  cd: {
+    exec: (args) => {
+        // The original logic of the cd command is now inside the 'exec' property.
+        if (args.length === 0) {
+          return "Usage: cd <directory>";
+        }
+        const targetPath = args.join(' ');
+
+        if (targetPath === "..") {
+            if (path.length > 1) {
+                path.pop();
+                current = path[path.length - 1];
+                saveCurrentPath();
+            }
+        } else {
+            const result = findNodeByPath(targetPath);
+            if (result && result.node && result.node.children) { // Ensure it's a directory
+                current = result.node;
+                path = result.newPathArray;
+                saveCurrentPath();
+            } else if (result && result.node && !result.node.children) {
+                 print(`cd: ${targetPath}: Not a directory`, "error");
+                 return false;
+            } else {
+                print(`cd: ${targetPath}: No such file or directory`, "error");
+                return false;
+            }
+        }
+        update_user_path();
+    },
+    manual: "NAME\n  cd - change the current directory\n\nSYNOPSIS\n  cd <directory>\n  cd ..\n\nDESCRIPTION\n  Change the current bookmark folder to <directory>. 'cd ..' moves to the parent folder."
+  },
+  pwd: {
+    exec: () => "/" + path.slice(1).map(p => p.title).join("/"),
+    manual: 
+    `NAME
+  pwd - print name of current/working directory
+
+SYNOPSIS
+  pwd
+
+DESCRIPTION
+  Print the full path of the current bookmark folder.`
+  },
+  mkdir: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: mkdir <directory_name>"); return resolve(); }
+        const dirName = args.join(" ");
+        if (findChildByTitle(current.children || [], dirName)) {
+            print(`mkdir: cannot create directory '${dirName}': File exists`);
+            resolve(false);
+            return resolve(false);
+        }
+        chrome.bookmarks.create({ parentId: current.id, title: dirName }, async (newFolder) => {
+            if (chrome.runtime.lastError) {
+                print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Directory '${newFolder.title}' created.`);
+                await refreshStateAfterModification(); // ★★★ Use the new refresh function
+            }
+            resolve();
+        });
+    }),
+    manual: `NAME
+  mkdir - make directories
+
+SYNOPSIS
+  mkdir <directory_name>
+
+DESCRIPTION
+  Create a new bookmark folder named <directory_name>.`
+  },
+
+  rm: {
+    exec: (args, options) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: rm [-r] [-f] <name>"); return resolve(); }
         const targetName = args.join(" ");
         const target = findChildByTitleFileOrDir(current.children || [], targetName);
-
         if (!target) {
             if (options.f) return resolve();
             print(`rm: cannot remove '${targetName}': No such file or directory`);
+            resolve(false);
             return resolve();
         }
-
         const isDirectory = !!target.children;
         const isRecursive = !!options.r;
 
-        const refreshCurrentAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-
-        if (isDirectory && isRecursive) {
-            chrome.bookmarks.removeTree(target.id, () => {
-                if (chrome.runtime.lastError) {
-                    print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
-                } else {
-                    print(`Recursively removed '${targetName}'.`);
-                }
-                refreshCurrentAndResolve();
-            });
-            return;
-        }
-
-        if (isDirectory && target.children.length > 0) {
-            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
-            return resolve();
-        }
-
-        chrome.bookmarks.remove(target.id, () => {
+        const removeCallback = async () => {
             if (chrome.runtime.lastError) {
                 print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
             } else {
                 print(`Removed '${targetName}'.`);
             }
-            refreshCurrentAndResolve();
-        });
-    });
-  },
-  rmdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rmdir <directory_name>");
-            return resolve();
-        }
-        const dirName = args.join(" ");
-        const target = findChildByTitleFileOrDir(current.children || [], dirName);
+            await refreshStateAfterModification(); // ★★★ Use the new refresh function
+            resolve();
+        };
 
-        if (!target) {
-            print(`rmdir: failed to remove '${dirName}': No such directory`);
+        if (isDirectory && isRecursive) {
+            chrome.bookmarks.removeTree(target.id, removeCallback);
+            return;
+        }
+        if (isDirectory && target.children.length > 0) {
+            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
             return resolve();
         }
-        if (!target.children) {
-            print(`rmdir: failed to remove '${dirName}': Not a directory`);
-            return resolve();
-        }
-        if (target.children.length > 0) {
-            print(`rmdir: failed to remove '${dirName}': Directory not empty`);
-            return resolve();
-        }
+        chrome.bookmarks.remove(target.id, removeCallback);
+    }),
+    manual: `NAME
+  rm - remove files or directories
 
-        chrome.bookmarks.remove(target.id, () => {
-            if (chrome.runtime.lastError) {
-                print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
-            } else {
-                print(`Removed directory '${dirName}'.`);
-            }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        });
-    });
+SYNOPSIS
+  rm [-r] [-f] <name>
+
+DESCRIPTION
+  Removes the specified bookmark or folder.
+
+  -r    remove directories and their contents recursively.
+  -f    force. Ignore nonexistent files, never prompt.`
   },
+  rmdir: (args) => new Promise(async (resolve) => {
+    if (args.length === 0) { print("Usage: rmdir <directory_name>"); return resolve(); }
+    const dirName = args.join(" ");
+    const target = findChildByTitleFileOrDir(current.children || [], dirName);
+    if (!target) {
+        print(`rmdir: failed to remove '${dirName}': No such directory`); 
+        resolve(false);
+        return resolve();
+    }
+    if (!target.children) {
+        print(`rmdir: failed to remove '${dirName}': Not a directory`); 
+        resolve(false);
+        return resolve();
+    }
+    if (target.children.length > 0) {
+        print(`rmdir: failed to remove '${dirName}': Directory not empty`); 
+        resolve(false);
+        return resolve();
+    }
+    chrome.bookmarks.remove(target.id, async () => {
+        if (chrome.runtime.lastError) {
+            print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
+        } else {
+            print(`Removed directory '${dirName}'.`);
+        }
+        await refreshStateAfterModification(); // ★★★ Use the new refresh function
+        resolve();
+    });
+  }),
   'privacy-ok' : (args, options) => {
     awaiting();
     chrome.storage.sync.set({ privacyPolicyVersion: PRIVACY_POLICY_VERSION }, () => {
@@ -835,19 +1054,182 @@ const commands = {
     done();
   },
   // Theme 
-  theme: (args, options) => {
-    const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-    const themeName = args[0];
-    if (!themeName) {
-        return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
-    }
-    if (supportedThemes.includes(themeName)) {
-        applyTheme(themeName);
-        chrome.storage.sync.set({ theme: themeName }); // 保存新设置
-        return `Theme set to ${themeName}.`;
-    } else {
-        return `Error: Theme '${themeName}' not supported.`;
-    }
+  theme: {
+    exec: (args, options) => {
+        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+        const themeName = args[0];
+        if (!themeName) {
+            return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+        }
+        if (supportedThemes.includes(themeName)) {
+            applyTheme(themeName);
+            return `Theme set to ${themeName}.`;
+        } else {
+            return `Error: Theme '${themeName}' not supported.`;
+        }
+    },
+    suggestions: (args) => {
+        if (args.length <= 1) {
+            return ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+        }
+        return [];
+    },
+    manual: `NAME
+  theme - change the terminal's color scheme
+
+SYNOPSIS
+  theme [<theme_name>]
+
+DESCRIPTION
+  Switches the visual theme of the terminal. If no theme is provided, it lists the current and available themes.
+
+AVAILABLE THEMES
+  default, ubuntu, powershell, cmd, kali, debian`
+  },
+
+  config: {
+    exec: async (args) => {
+    const subCommand = args.shift() || 'status';
+
+    // Helper function for migration logic to avoid repetition
+    const migrateToBookmarks = async () => {
+        print("Migrating settings from storage to bookmarks...");
+        for (const key of CONFIG_KEYS) {
+            const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
+            let valueToWrite = storageData[key];
+
+            // ★★★ FIX IS HERE ★★★
+            // If the value is missing from storage, create a default value.
+            if (valueToWrite === undefined) {
+                print(`'${key}' not found in storage, creating default bookmark...`, "hint");
+                switch (key) {
+                    case 'aliases':
+                    case 'environmentVars':
+                        valueToWrite = {};
+                        break;
+                    case 'settings':
+                        valueToWrite = { default_mode: default_mode, default_search_engine: default_search_engine };
+                        break;
+                    case 'theme':
+                        valueToWrite = promptTheme || 'default';
+                        break;
+                    case 'cursorStyle':
+                        valueToWrite = cursorStyle || 'block';
+                        break;
+                    default:
+                        valueToWrite = null; // Don't write unknown keys
+                }
+            }
+            
+            if (valueToWrite !== null) {
+                await writeSettingToBookmark(key, valueToWrite);
+            }
+        }
+        print("Migration complete.", "success");
+    };
+
+
+    switch (subCommand) {
+        case 'setup':
+            const mode = args[0];
+            if (mode !== 'bookmark' && mode !== 'storage') {
+                print("Usage: config setup <bookmark|storage>", "error");
+                return;
+            }
+
+            if (mode === 'bookmark') {
+                let settingsFolder = await getOrCreateSettingsFolder(false);
+                if (settingsFolder) {
+                    print("'.settings' folder already exists.", "warning");
+                    let replace = await userInputMode("Replace settings in bookmark with settings from storage? [Y/n] ");
+                    print(`Replace settings in bookmark with settings from storage? [Y/n] ${user_input_content}`)
+                    if (replace) {
+                        await migrateToBookmarks();
+                    } else {
+                        print("Keeping existing bookmark settings.", "info");
+                    }
+                } else {
+                    let confirm = await userInputMode("This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ");
+                    print(`This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ${user_input_content}`)
+                    if (confirm) {
+                        await getOrCreateSettingsFolder(true); // Ensure folder is created before migration
+                        await migrateToBookmarks();
+                    } else {
+                        print("Setup aborted by user.", "info");
+                        return;
+                    }
+                }
+            }
+            
+            configMode = mode;
+            await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
+            print(`Configuration mode set to: ${configMode}`, "success");
+            break;
+
+        case 'sync':
+            awaiting();
+            if (configMode === 'storage') {
+                print("Syncing: Bookmarks -> Storage not implemented yet. Switch to bookmark mode to sync from storage.", "warning");
+                // The logic for Bookmarks -> Storage would be more complex
+                // as it involves reading all bookmark files and setting them in storage.
+            } else { // configMode === 'bookmark'
+                await migrateToBookmarks();
+            }
+            done();
+            break;
+
+        case 'autosync':
+            autosyncEnabled = !autosyncEnabled;
+            await new Promise(resolve => chrome.storage.sync.set({ autosyncEnabled: autosyncEnabled }, resolve));
+            print(`Autosync is now ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}.`, "success");
+            if (autosyncEnabled) {
+                print("Changes will now be saved to both backends automatically.", "hint");
+            }
+            break;
+
+        case 'status':
+        default:
+            print("--- Configuration Status ---", "highlight");
+            print(`Current Mode: ${configMode}`);
+            print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
+            print("\nAvailable commands:", "hint");
+            print("  config setup <bookmark|storage> - Set the primary settings backend.");
+            print("  config sync                     - Sync settings from storage to bookmarks.");
+            print("  config autosync                 - Toggle auto-syncing on changes.");
+            break;
+      }
+    },
+    suggestions: (args) => {
+        const subCommand = args[0];
+        if (args.length <= 1) {
+            return ['setup', 'sync', 'autosync', 'status'];
+        }
+        if (subCommand === 'setup' && args.length <= 2) {
+            return ['bookmark', 'storage'];
+        }
+        return [];
+    },
+    manual: `NAME
+  config - manage terminal configuration
+
+SYNOPSIS
+  config [setup <mode> | sync | autosync | status]
+
+DESCRIPTION
+  Manages how and where terminal settings are stored.
+
+  setup <bookmark|storage>
+    Sets the primary settings backend. 'storage' is the browser's sync storage. 'bookmark' uses a hidden ~/.settings folder in your bookmarks bar, allowing for manual editing.
+
+  sync
+    In bookmark mode, this command pulls all settings from browser storage and writes them to the ~/.settings folder, creating default files if they don't exist.
+
+  autosync
+    Toggles automatic synchronization. When enabled, settings are written to both backends simultaneously.
+
+  status
+    Displays the current configuration mode and autosync status.`
+    
   },
 
   uploadbg: () => {
@@ -877,30 +1259,28 @@ const commands = {
     }
     return ""; // Return empty string for a clean prompt return
   },
-  cat: (args, options) => {
-    if (args.length === 0) {
-      return "Usage: cat <bookmark_name>";
-    }
-    const targetName = args.join(" ");
-    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+  cat: {
+    exec: (args) => {
+        if (args.length === 0) return "Usage: cat <bookmark_name>";
+        const targetName = args.join(" ");
+        const target = findChildByTitleFileOrDir(current.children || [], targetName);
+        if (!target) return `cat: ${targetName}: No such file or directory`;
+        if (target.children) return `cat: ${targetName}: Is a directory`;
+        print("--- Bookmark Details ---", "highlight");
+        print(`Title:    ${target.title}`);
+        print(`URL:      ${target.url}`);
+        if (target.dateAdded) print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
+        print("----------------------", "highlight");
+        return "";
+    },
+    manual: `NAME
+  cat - display bookmark details
 
-    if (!target) {
-      return `cat: ${targetName}: No such file or directory`;
-    }
+SYNOPSIS
+  cat <bookmark_name>
 
-    if (target.children) { // It's a directory
-      return `cat: ${targetName}: Is a directory`;
-    }
-
-    // It's a bookmark, print its details
-    print("--- Bookmark Details ---", "highlight");
-    print(`Title:    ${target.title}`);
-    print(`URL:      ${target.url}`);
-    if (target.dateAdded) {
-       print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
-    }
-    print("----------------------", "highlight");
-    return "";
+DESCRIPTION
+  Displays the title, URL, and creation date of a specified bookmark.`
   },
 
   setbg: (args) => {
@@ -1003,68 +1383,59 @@ const commands = {
       applyUpdates();
     }
   },
-  history: (args, options, pipedInput) => {
-    if (previousCommands.length === 0) {
-      return ["No history yet."];
-    }
-    // Map history to an array of strings
-    return previousCommands.map((cmd, index) => {
-        const paddedIndex = String(index + 1).padStart(3, ' ');
-        return `${paddedIndex}  ${cmd}`;
-    });
+  history: {
+    exec: () => {
+        if (previousCommands.length === 0) return ["No history yet."];
+        return previousCommands.map((cmd, index) => `${String(index + 1).padStart(3, ' ')}  ${cmd}`);
+    },
+    manual: `NAME
+  history - display command history
+
+SYNOPSIS
+  history
+
+DESCRIPTION
+  Displays the list of previously executed commands.`
   },
 
-  touch: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: touch <filename>");
-            return resolve();
-        }
+  touch: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: touch <filename>"); return resolve(); }
         const filename = args.join(" ");
-        const existing = findChildByTitleFileOrDir(current.children || [], filename);
-
-        if (existing) {
-            return resolve();
-        }
-
-        chrome.bookmarks.create({
-            parentId: current.id,
-            title: filename,
-            url: "about:blank#touched"
-        }, (newItem) => {
+        if (findChildByTitleFileOrDir(current.children || [], filename)) return resolve();
+        
+        chrome.bookmarks.create({ parentId: current.id, title: filename, url: "about:blank#touched" }, async (newItem) => {
             if (chrome.runtime.lastError) {
                 print(`Error: ${chrome.runtime.lastError.message}`, "error");
             }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
+            await refreshStateAfterModification(); // ★★★ FIX IS HERE ★★★
+            resolve();
         });
-    });
+    }),
+    manual: `NAME
+  touch - create a new, empty bookmark
+
+SYNOPSIS
+  touch <filename>
+
+DESCRIPTION
+  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.`
   },
-  editlink: (args) => {
-    return new Promise((resolve) => {
+  editlink: {
+    exec: (args) => new Promise((resolve) => {
         if (args.length < 2) {
             print("Usage: editlink <bookmark_name> <new_url>");
             return resolve();
         }
         const bookmarkName = args.shift(); 
         const newUrl = args.join(' ');
-
         const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
         if (!target) {
-            print(`editlink: '${bookmarkName}': No such file or bookmark.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': No such file or bookmark.`); return resolve();
         }
         if (target.children) {
-            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`); return resolve();
         }
-
         chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
             if (chrome.runtime.lastError) {
                 print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
@@ -1072,7 +1443,6 @@ const commands = {
                 print(`Updated link for '${updatedNode.title}'.`);
                 print(`New URL: ${updatedNode.url}`, "success");
             }
-            
             chrome.bookmarks.getSubTree(current.id, (results) => {
                 if (results && results[0]) {
                     current = results[0];
@@ -1081,78 +1451,147 @@ const commands = {
                 resolve();
             });
         });
-    });
+    }),
+    manual: `NAME
+  editlink - change the URL of a bookmark
+
+SYNOPSIS
+  editlink <bookmark_name> <new_url>
+
+DESCRIPTION
+  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.`
   },
-  mv: (args) => {
-    return new Promise((resolve) => {
+  mv: {
+    exec: async (args) => {
         if (args.length < 2) {
-            print("Usage: mv <source> <destination>");
-            return resolve();
+            print("Usage: mv <source> <destination_path>");
+            return;
         }
         const sourceName = args[0];
-        const destName = args[1];
+        const destArg = args[1];
+
         const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
         if (!sourceNode) {
             print(`mv: cannot stat '${sourceName}': No such file or directory`);
-            return resolve();
+            return;
         }
-        const destNode = findChildByTitleFileOrDir(current.children || [], destName);
 
-        const refreshAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-        
-        if (destNode && destNode.children) {
-            chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+
+        // If destArg ends with '/', it's definitely a directory path.
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.'; // Handle case of just "/"
+            newName = sourceNode.title; // Keep original name
         } else {
-            chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                // No slash, means renaming in the current directory.
+                destPath = '.';
+                newName = destArg;
+            }
         }
-    });
+        if (newName === "") newName = sourceNode.title; // if path is like '~/folder/', newName is empty, so use original
+
+        const destDirResult = findNodeByPath(destPath);
+
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`mv: cannot move '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        const destParentId = destDirResult.node.id;
+
+        // Step 1: Move the node to the new parent directory.
+        await new Promise(resolve => {
+            chrome.bookmarks.move(sourceNode.id, { parentId: destParentId }, (movedNode) => {
+                if (chrome.runtime.lastError) {
+                    print(`Error moving: ${chrome.runtime.lastError.message}`, "error");
+                    resolve();
+                    return;
+                }
+                // Step 2: If a new name is specified, update the title.
+                if (newName && newName !== movedNode.title) {
+                    chrome.bookmarks.update(movedNode.id, { title: newName }, resolve);
+                } else {
+                    resolve();
+                }
+            });
+        });
+
+        await refreshStateAfterModification();
+    },
+    manual: `NAME
+  mv - move (rename) files
+
+SYNOPSIS
+  mv <source> <destination>
+
+DESCRIPTION
+  Renames <source> to <destination>, or moves <source> into <destination> if <destination> is an existing folder.`
   },
-  cp: async (args, options) => {
-    if (args.length < 2) {
-      return "Usage: cp [-r] <source> <destination>";
-    }
-    const sourceName = args[0];
-    const destName = args[1];
-    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
-    if (!sourceNode) {
-      return `cp: cannot stat '${sourceName}': No such file or directory`;
-    }
-    if (sourceNode.children && !options.r) {
-      return `cp: -r not specified; omitting directory '${sourceName}'`;
-    }
-    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
-    
-    try {
-      if (destNode && destNode.children) {
-        await copyNodeRecursively(sourceNode, destNode.id);
-      } else {
-        await copyNodeRecursively(sourceNode, current.id, destName);
-      }
-      
-      const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
-      if (results && results[0]) {
-          current = results[0];
-          path[path.length - 1] = current;
-      }
-    } catch (e) {
-      print(`Error copying: ${e.message}`, "error");
-    }
+
+  cp: {
+    exec: async (args, options) => {
+        if (args.length < 2) return "Usage: cp [-r] <source> <destination_path>";
+        const sourceName = args[0];
+        const destArg = args[1];
+
+        const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+        if (!sourceNode) return `cp: cannot stat '${sourceName}': No such file or directory`;
+        if (sourceNode.children && !options.r) return `cp: -r not specified; omitting directory '${sourceName}'`;
+
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+        
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.';
+            newName = sourceNode.title;
+        } else {
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                destPath = '.';
+                newName = destArg;
+            }
+        }
+        if (newName === "") newName = sourceNode.title;
+
+        const destDirResult = findNodeByPath(destPath);
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`cp: cannot copy '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        try {
+            await copyNodeRecursively(sourceNode, destDirResult.node.id, newName);
+            await refreshStateAfterModification();
+        } catch (e) {
+            print(`Error copying: ${e.message}`, "error");
+        }
+    },
+    manual: `NAME
+  cp - copy files and directories
+
+SYNOPSIS
+  cp [-r] <source> <destination>
+
+DESCRIPTION
+  Copies <source> to <destination>.
+
+  -r    copy directories recursively.`
   },
-  find: (args, options) => {
+  find: {
+    exec: (args, options) => {
     return new Promise(resolve => {
         if (args.length == 0) {
             print("Usage: find -name <pattern>");
@@ -1170,6 +1609,15 @@ const commands = {
         resolve();
     });
   },
+  manual: `NAME
+  find - search for files in a directory hierarchy
+
+SYNOPSIS
+  find -name <pattern>
+
+DESCRIPTION
+  Searches for bookmarks/folders matching the <pattern> within the current directory. The pattern can include a wildcard '*' (e.g., 'find -name "*search*").`
+},
 
   alias: (args) => {
       if (args.length === 0) {
@@ -1193,7 +1641,8 @@ const commands = {
       const name = match[1];
       const command = match[2];
       aliases[name] = command;
-      chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      // chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      setSetting('aliases', aliases);
       return `Alias '${name}' set.`;
   },
   unalias: (args) => {
@@ -1204,7 +1653,8 @@ const commands = {
 
       if (aliases.hasOwnProperty(aliasName)) {
           delete aliases[aliasName]; // Remove the alias from our object
-          chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          // chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          setSetting('aliases', aliases);
           return `Alias removed: ${aliasName}`;
       } else {
           return `unalias: no such alias: ${aliasName}`;
@@ -1216,13 +1666,23 @@ const commands = {
           return "What manual page do you want?";
       }
       const page = args[0];
-      const content = manPages[page];
+      const commandDef = commands[page];
+      let content = null;
+
+      // Priority 1: Check for the '.manual' property in the new command format.
+      if (commandDef && typeof commandDef === 'object' && commandDef.manual) {
+          content = commandDef.manual;
+      } 
+      // Priority 2: Fallback to the old manPages object for backward compatibility.
+      else if (manPages[page]) {
+          content = manPages[page];
+      }
 
       if (!content) {
           return `No manual entry for ${page}`;
       }
 
-      // Print with pre-wrap to respect newlines in the man page content
+      // The logic for printing the manual content remains the same.
       const lines = content.split('\n');
       lines.forEach(line => {
         // Simple formatting for headings (uppercase)
@@ -1234,32 +1694,10 @@ const commands = {
       });
   },
   nano: (args) => {
-    if (args.length === 0) {
-      return "Usage: nano <bookmark_name>";
-    }
-    const bookmarkName = args.join(' ');
-    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
-    if (!target) {
-      return `nano: '${bookmarkName}': No such file or bookmark.`;
-    }
-    if (target.children) {
-      return `nano: '${bookmarkName}': Is a directory.`;
-    }
-
-    // Enter editing mode
-    isEditing = true;
-    editingBookmarkId = target.id;
-
-    // Populate the editor fields
-    editorTitleInput.value = target.title;
-    editorUrlInput.value = target.url;
-    editorStatus.textContent = `Editing: ${target.title}`;
-
-    // Switch views
-    terminal.style.display = "none";
-    editorView.style.display = "flex";
-    editorTitleInput.focus();
+    setupNanoEditor(args);
+  },
+  vim: (args) => {
+    setupVimEditor(args);
   },
   export: (args) => {
     if (args.length === 0) {
@@ -1395,66 +1833,229 @@ const commands = {
     print("");
 
     print("Search Commands", "highlight");
-    print("  google <query> [-b]   - Search with Google.");
-    print("  bing <query> [-b]     - Search with Bing.");
-    print("  baidu <query> [-b]    - Search with Baidu.");
-    print("  yt <query> [-b]       - Search with YouTube.");
-    print("  bilibili <query> [-b] - Search with Bilibili.");
-    print("  spotify <query> [-b]  - Search with Spotify.");
+    print("  google, bing, baidu, yt, ...  - Search on a specific engine.");
+    print("  default <engine|on|off>       - Manage the default search behavior.");
     print("");
     
     print("Navigation & Bookmarks", "highlight");
-    print("  ls [-l]               - List bookmarks in current directory.");
-    print("  cd <folder>           - Change directory to a bookmark folder.");
-    print("  cd ..                 - Go to parent directory.");
-    print("  pwd                   - Show current bookmark path.");
-    print("  goto <url> [-b]       - Navigate to a specific URL.");
-    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
+    print("  ls [-la]                      - List bookmarks in the current directory.");
+    print("  cd <folder>                   - Change directory.");
+    print("  pwd                           - Show current bookmark path.");
+    print("  goto <url> [-b]               - Navigate to a specific URL.");
+    print("  tree                          - Display the directory tree structure.");
+    print("  ./<bookmark_name>             - Open a bookmark in the current directory.");
     print("");
 
     print("File & Directory Operations", "highlight");
-    print("  mkdir <folder>        - Create a new bookmark folder.");
-    print("  touch <file>          - Create a new, empty bookmark.");
-    print("  mv <src> <dest>       - Move or rename a bookmark/folder.");
-    print("  cp [-r] <src> <dest>  - Copy a bookmark or folder.");
-    print("  rm [-r] <name>        - Remove a bookmark or folder.");
-    print("  rmdir <folder>        - Remove an empty bookmark folder.");
-    print("  find [-name <pat>]    - Find bookmarks/folders by name.");
-    print("  nano <file>           - Edit a bookmark.");
-    print("  editlink <file>       - Update a bookmark's url.");
-    print("");
-
-    print("Browser & System Control", "highlight"); // <-- NEW SECTION
-    print("  tabs <ls|close|switch> - Manage browser tabs.");
-    print("  downloads <ls>        - List recent downloads.");
-    print("  wget <url>            - Download a file from a URL.");
-    print("  ping <host>           - Ping a host.");
-    print("  date                  - Show current date and time.");
-    print("  clear (or cls)        - Clear the terminal screen.");
-    print("  locale                - Show browser language settings.");
-    print("");
-
-    print("Shell, Environment & History", "highlight"); // <-- NEW SECTION
-    print("  export VAR=value      - Set an environment variable.");
-    print("  unset <VAR_NAME>      - Unset (delete) an environment variable.");
-    print("  env                   - Display environment variables.");
-    print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
-    print("  history               - Show command history.");
-    print("  alias [name='cmd']    - Create or list command aliases.");
-    print("  unalias <name>        - Remove an alias.");
+    print("  mkdir <folder>                - Create a new bookmark folder.");
+    print("  touch <file>                  - Create a new, empty bookmark.");
+    print("  mv <src> <dest>               - Move or rename a bookmark/folder.");
+    print("  cp [-r] <src> <dest>          - Copy a bookmark or folder.");
+    print("  rm [-r] <name>                - Remove a bookmark or folder.");
+    print("  rmdir <folder>                - Remove an empty bookmark folder.");
+    print("  find <path> -name <pattern>   - Find bookmarks/folders by name.");
+    print("  cat <bookmark>                - Display details of a bookmark.");
     print("");
     
-    print("Account & Customization", "highlight");
-    print("  mslogin / mslogout    - Log in/out with a Microsoft account.");
-    print("  theme <name>          - Change terminal theme.");
-    print("  uploadbg / setbg      - Manage custom background.");
-    print("  man <command>         - Show the manual page for a command.");
+    print("Editors", "highlight");
+    print("  nano <file>                   - Edit a bookmark or setting file with a simple editor.");
+    print("  vim <file>                    - Edit a bookmark's raw data with a Vim-like editor.");
+    print("");
+
+    print("Browser & System Control", "highlight");
+    print("  tabs <ls|close|switch>        - Manage browser tabs.");
+    print("  downloads <ls>                - List recent downloads.");
+    print("  wget <url>                    - Download a file from a URL.");
+    print("  ping <host>                   - Ping a host.");
+    print("  date                          - Show current date and time.");
+    print("  clear (or cls)                - Clear the terminal screen.");
+    print("");
+
+    print("Shell, Environment & History", "highlight");
+
+    print("  export VAR=value              - Set an environment variable.");
+    print("  unset <VAR_NAME>              - Unset an environment variable.");
+    print("  env                           - Display environment variables.");
+    print("  grep <pattern>                - Filter piped input.");
+    print("  history                       - Show command history.");
+    print("  alias [name='cmd']            - Create or list command aliases.");
+    print("  unalias <name>                - Remove an alias.");
+    print("");
+    
+    print("Account, Customization & Meta", "highlight");
+    print("  mslogin / mslogout            - Log in/out with a Microsoft account.");
+    print("  theme <name>                  - Change terminal theme.");
+    print("  cursor <style>                - Change cursor style (block, bar, underline).");
+    print("  uploadbg / setbg              - Manage custom background.");
+    print("  setbgAPI <url>                - Set the random background image API URL.");
+    print("  config <setup|sync|...>       - Manage how and where settings are stored.");
+    print("  apt <update|upgrade>          - Check for or apply extension updates.");
+    print("  about [-V]                    - Show details about this extension.");
+    print("  feedback                      - Provide feedback or rate the extension.");
+    print("  man <command>                 - Show the manual page for a command.");
     print("");
 
     print("For more details on a command, type: man <command_name>", "hint");
     return ""; 
   },
+  about: (args, options) => {
+    const manifest = chrome.runtime.getManifest();
+
+    if (options.version || options.V || options.v) {
+        print(`Terminal Startup v${manifest.version}`);
+        print(`Privacy Policy Version v${PRIVACY_POLICY_VERSION}`);
+        return;
+    }
+
+    // ASCII Art Title
+    const titleArt = start_terminal_ascii.split('\n');
+
+    titleArt.forEach(line => print(line, 'highlight'));
+    // print(titleArt);
+    print(""); // Spacer
+
+    // Gather all details into an array of objects
+    const details = [
+        { label: "Version", value: manifest.version },
+        { label: "Author", value: manifest.author },
+        { label: "License", value: "MIT License" }, // You can change this if you use a different license
+        { label: "Homepage", value: manifest.homepage_url },
+        { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
+        { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
+        { label: "Privacy Policy Version", value: PRIVACY_POLICY_VERSION },
+        { label: "User", value: user || "guest" },
+        { label: "Uptime", value: formatUptime(Date.now() - startTime) },
+        { label: "Browser", value: `${BROWSER_TYPE}` },
+        { label: "Language", value: navigator.language },
+    ];
+
+    // Calculate the longest label for alignment
+    const longestLabel = details.reduce((max, item) => Math.max(max, getVisualWidth(item.label)), 0);
+
+    // Print each detail in a formatted key-value pair
+    details.forEach(item => {
+        const padding = ' '.repeat(longestLabel - getVisualWidth(item.label));
+        const line = `<span class="output-folder">${item.label}${padding}</span> : ${item.value}`;
+        print(line, 'info', true);
+    });
+
+    return ""; // Return nothing to avoid an extra blank line from the engine
+  },
+  feedback: async () => {
+    print("How can we help?", "highlight");
+    print("");
+    print("[1] Rate The Extension");
+    print("[2] Feedback");
+    print("[3] Report a Bug or Suggest a Feature");
+    print("");
+
+    // Use the existing userInputMode to get the user's choice
+    const choice = await userInputMode("Enter a number (or press any other key to cancel): ");
+    
+    // The user input content is stored in the global `user_input_content` variable
+    // We need to echo it back so the user sees what they typed.
+    print(`Enter a number (or press any other key to cancel): ${user_input_content}`);
+
+    if (user_input_content === '1') {
+        print("Opening the Add-on store page...", "info");
+        window.open(STORE_URL, '_blank');
+    }else if (user_input_content === '2') {
+        print("Opening the feedback form...", "info");
+        window.open(FEEDBACK, '_blank');
+    } else if (user_input_content === '3') {
+        print("Opening the reporting form...", "info");
+        window.open(REPORT, '_blank');
+    } else {
+        print("Operation cancelled.", "warning");
+    }
+    return;
+},
 };
+
+/**
+ * Tokenizes a command line into segments based on logical operators.
+ * @param {string} line - The full input line.
+ * @returns {Array<object>} An array of command objects, e.g., [{ command: "cmd1", separator: "&&" }, ...]
+ */
+function tokenizeLine(line) {
+    const regex = /(\s*&&\s*|\s*\|\|\s*|\s*;\s*)/g;
+    const parts = line.split(regex);
+    
+    const tokens = [];
+    for (let i = 0; i < parts.length; i += 2) {
+        const command = parts[i].trim();
+        // The separator is what FOLLOWS the command. The last command has no explicit separator.
+        const separator = (parts[i + 1] || null)?.trim();
+        if (command) {
+            tokens.push({ command, separator });
+        }
+    }
+    return tokens;
+}
+
+/**
+ * Formats a duration in milliseconds to a human-readable string (e.g., "1m 23s").
+ * @param {number} ms - The duration in milliseconds.
+ * @returns {string} The formatted uptime string.
+ */
+function formatUptime(ms) {
+    if (ms < 1000) return `${ms}ms`;
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    let result = '';
+    if (minutes > 0) result += `${minutes}m `;
+    result += `${seconds}s`;
+    return result;
+}
+
+/**
+ * Recursively finds a node by its ID within a given tree.
+ * @param {object} node - The starting node (e.g., the root).
+ * @param {string} targetId - The ID of the node to find.
+ * @param {array} currentPathArray - The path array leading to the starting node.
+ * @returns {{node: object, path: array}|null}
+ */
+function findNodeById(node, targetId, currentPathArray) {
+    if (node.id === targetId) {
+        return { node: node, path: currentPathArray };
+    }
+    if (node.children) {
+        for (const child of node.children) {
+            const result = findNodeById(child, targetId, [...currentPathArray, child]);
+            if (result) return result;
+        }
+    }
+    return null;
+}
+
+/**
+ * Performs a full state refresh after a bookmark modification.
+ * Re-fetches the entire bookmark tree and rebuilds all path-related global variables.
+ */
+async function refreshStateAfterModification() {
+    const currentId = current.id; // Save the ID of our current location
+
+    // 1. Re-fetch the entire tree to get fresh data
+    const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+    
+    // 2. Re-initialize global root variables
+    root = bookmarkTree[0];
+    homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
+
+    // 3. Find our current location in the NEW tree and rebuild the path
+    const result = findNodeById(root, currentId, [root]);
+
+    if (result) {
+        // If our current directory still exists, restore the state
+        current = result.node;
+        path = result.path;
+    } else {
+        // If our directory was deleted (e.g., by 'rm -r .'), go back to home
+        current = homeDirNode;
+        path = [root, homeDirNode];
+    }
+}
 
 /**
  * Finds a bookmark node by a given path string (absolute or relative).
@@ -1462,47 +2063,179 @@ const commands = {
  * @returns {{node: object, newPathArray: array}|null} The found node and its full path array, or null if not found.
  */
 function findNodeByPath(pathStr) {
+    if (!pathStr) return null;
 
-    if (pathStr === '~') {
-        return { node: root, newPathArray: [root] };
+    // Handle '.' as a special case for the current directory
+    if (pathStr === '.') {
+        return { node: current, newPathArray: path };
     }
 
-    let startNode = current;
-    let pathSegments = pathStr.split('/').filter(s => s.length > 0);
-    let newPathArray = [...path]; // Start with a copy of the current path for relative search
+    let startNode;
+    let newPathArray;
+    let pathSegments;
 
-    // Check for absolute path
-    if (pathStr.startsWith('/') || pathStr.startsWith('~/')) {
+    // 1. Determine the starting point based on the path prefix
+    if (pathStr.startsWith('~/')) {
+        startNode = homeDirNode;
+        newPathArray = [root, homeDirNode];
+        pathSegments = pathStr.substring(2).split('/').filter(s => s.length > 0);
+    } else if (pathStr.startsWith('/')) {
         startNode = root;
         newPathArray = [root];
-    }
-    
-    // If the path was just "/" or "~/", return the root
-    if (pathSegments.length === 0 && (pathStr.startsWith('/') || pathStr.startsWith('~/'))) {
-        return { node: root, newPathArray: [root] };
+        pathSegments = pathStr.substring(1).split('/').filter(s => s.length > 0);
+    } else {
+        startNode = current;
+        newPathArray = [...path];
+        pathSegments = pathStr.split('/').filter(s => s.length > 0);
     }
 
+    if (pathSegments.length === 0) {
+        return { node: startNode, newPathArray: newPathArray };
+    }
+
+    // 2. Traverse the path, ensuring all intermediate parts are directories
     let currentNode = startNode;
-    for (const segment of pathSegments) {
-        if (!currentNode.children) {
-            return null; // Cannot traverse further
+    for (let i = 0; i < pathSegments.length - 1; i++) {
+        const segment = pathSegments[i];
+        if (!currentNode.children) return null; // Path is invalid
+
+        if (segment === '..') {
+            if (newPathArray.length > 1) newPathArray.pop();
+            currentNode = newPathArray[newPathArray.length - 1] || root;
+            continue;
         }
+
         const foundNode = currentNode.children.find(child => child.title === segment && child.children);
-        
         if (foundNode) {
             currentNode = foundNode;
             newPathArray.push(currentNode);
         } else {
-            return null; // Segment not found or is not a directory
+            return null; // An intermediate directory was not found
         }
     }
 
-    return { node: currentNode, newPathArray: newPathArray };
+    // 3. Find the final part of the path, which can be a FILE or a DIRECTORY
+    const lastSegment = pathSegments[pathSegments.length - 1];
+
+    if (lastSegment === '..') {
+        if (newPathArray.length > 1) newPathArray.pop();
+        currentNode = newPathArray[newPathArray.length - 1] || root;
+        return { node: currentNode, newPathArray: newPathArray };
+    }
+    
+    const finalNode = findChildByTitleFileOrDir(currentNode.children || [], lastSegment);
+
+    if (finalNode) {
+        if (finalNode.children) newPathArray.push(finalNode);
+        return { node: finalNode, newPathArray: newPathArray };
+    }
+
+    return null; // The final file/folder was not found
 }
 
 
 // Alias 
 // commands.yt = commands.youtube;
+
+function setupNanoEditor(args) {
+    if (args.length === 0) return "Usage: nano <bookmark_name>";
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) return `nano: '${bookmarkName}': No such file.`;
+    if (target.children) return `nano: '${bookmarkName}': Is a directory.`;
+
+    isEditing = true;
+    activeEditor = 'nano';
+    editingBookmarkId = target.id;
+    editingBookmarkTitle = target.title; // ★★★ 新增：保存当前文件名 ★★★
+    unsavedChanges = false;
+    
+    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
+
+    document.getElementById('nano-fields').style.display = 'none';
+    document.getElementById('editor-textarea').style.display = 'none';
+
+    if (isSettingsFile) {
+        const textarea = document.getElementById('editor-textarea');
+        try {
+            const rawJson = decodeURIComponent(target.url.split('#')[1] || '');
+            const parsedJson = JSON.parse(rawJson);
+            textarea.value = JSON.stringify(parsedJson, null, 2);
+        } catch (e) {
+            textarea.value = "Error: Could not parse bookmark data. Saving will overwrite.";
+        }
+        textarea.style.display = 'block';
+        textarea.readOnly = false;
+        setTimeout(() => textarea.focus(), 0);
+    } else {
+        document.getElementById('nano-fields').style.display = 'block';
+        editorTitleInput.value = target.title;
+        editorUrlInput.value = target.url;
+        editorTitleInput.focus();
+    }
+    
+    editorStatus.textContent = `Editing: ${target.title}`;
+    document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save    <span class="editor-shortcut">^X</span> Exit`;
+    
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+}
+
+function setupVimEditor(args) {
+    if (args.length === 0) return "Usage: vim <bookmark_name>";
+    const bookmarkName = args.join(' ');
+    const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
+
+    if (!target) return `vim: '${bookmarkName}': No such file.`;
+    
+    isEditing = true;
+    activeEditor = 'vim';
+    editingBookmarkId = target.id;
+    unsavedChanges = false;
+    vimMode = 'NORMAL';
+    
+    document.getElementById('nano-fields').style.display = 'none';
+    const textarea = document.getElementById('editor-textarea');
+    textarea.style.display = 'block';
+    textarea.readOnly = true;
+
+    // We use JSON.parse(JSON.stringify(...)) to get a clean, serializable copy of the object.
+    const fullBookmarkData = JSON.parse(JSON.stringify(target));
+    
+    // We can optionally remove properties the user should never edit
+    delete fullBookmarkData.children; // Never edit children array directly
+
+    textarea.value = JSON.stringify(fullBookmarkData, null, 2);
+
+    editorStatus.textContent = `Editing: ${target.title}`;
+    document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+
+    terminal.style.display = "none";
+    editorView.style.display = "flex";
+    setTimeout(() => textarea.focus(), 0);
+
+    textarea.oninput = () => { unsavedChanges = true; };
+}
+
+function exitEditor() {
+    if (unsavedChanges) {
+        editorStatus.textContent = "Warning: Unsaved changes detected! Press ^X again to discard and exit.";
+        // We add a temporary flag to allow exiting on the second try
+        window.forceExit = true;
+        setTimeout(() => { window.forceExit = false; }, 3000); // Flag resets after 3s
+        return;
+    }
+
+    isEditing = false;
+    editingBookmarkId = null;
+    unsavedChanges = false;
+    window.forceExit = false;
+
+    editorView.style.display = "none";
+    terminal.style.display = "block";
+    done();
+}
 
 function parseCommandLine(input) {
   const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map(t => t.replace(/^"|"$/g, "")) || [];
@@ -1512,22 +2245,30 @@ function parseCommandLine(input) {
   const args = [];
   const options = {};
 
-  const optionRequiresValue = { // Define which options expect a value
+  const optionRequiresValue = {
       ping: ["n"],
-      // Add other commands and their value-expecting options if any
+      // Define other commands and their value-expecting options here if any
   };
   const commandSpecificOptionValues = optionRequiresValue[command] || [];
 
   for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
-      if (token.startsWith("-")) {
-          const optName = token.replace(/^-+/, "");
-          if (commandSpecificOptionValues.includes(optName) && tokens[i+1] && !tokens[i+1].startsWith("-")) {
-              options[optName] = tokens[i+1];
-              i++; // Skip next token as it's the value
+      if (token.startsWith("-") && !token.startsWith("--")) { // Handle short options like -a, -l, -al
+          const optString = token.substring(1); // e.g., "al" or "n"
+
+          // Check if this is an option that expects a value (like 'ping -n 5')
+          if (commandSpecificOptionValues.includes(optString) && tokens[i + 1] && !tokens[i + 1].startsWith("-")) {
+              options[optString] = tokens[i + 1];
+              i++; // Important: skip the next token as it's been consumed as a value
           } else {
-              options[optName] = true;
+              // ★★★ NEW LOGIC: Treat it as a set of single-character boolean flags ★★★
+              for (const char of optString) {
+                  options[char] = true; // This will set options['a']=true and options['l']=true
+              }
           }
+      } else if (token.startsWith("--")) { // Handle long options like --help (for future use)
+           const optName = token.substring(2);
+           options[optName] = true;
       } else {
           args.push(token);
       }
@@ -1637,6 +2378,12 @@ async function ping_func(url, options) {
 
 // ! VERY IMPORTANT FUNCTION 
 function print(text, type = "info", allowHtml = false) {
+
+  if (isPiping) {
+    pipeBuffer.push(text);
+    return; // Divert output to the buffer and stop here.
+  }
+
   if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
     return; // If it doesn't match, simply don't print.
   }
@@ -1678,6 +2425,14 @@ function print(text, type = "info", allowHtml = false) {
 
 
 function printLine(text, type = "info", endLine = false) {
+
+  if (isPiping) {
+    // For printLine, we need to handle how it builds a line.
+    // For now, a simple push is sufficient. More complex logic can be added if needed.
+    pipeBuffer.push(text);
+    return;
+  }
+
   if (activeGrepPattern && !activeGrepPattern.test(textStr)) {
       return; // If it doesn't match, simply don't print.
   }
@@ -1843,15 +2598,6 @@ function expandVariables(input) {
 async function executePipeline(pipelineStr) {
     const pipedCommands = pipelineStr.split('|').map(c => c.trim());
 
-    const lastCommand = pipedCommands[pipedCommands.length - 1];
-    if (lastCommand.startsWith('grep ')) {
-        const grepPattern = lastCommand.substring(5).trim();
-        if (grepPattern) {
-            activeGrepPattern = new RegExp(grepPattern, 'i');
-            pipedCommands.pop(); // Remove grep from the list of commands to execute
-        }
-    }
-
     let previousOutput = null;
 
     for (let i = 0; i < pipedCommands.length; i++) {
@@ -1904,26 +2650,39 @@ async function executePipeline(pipelineStr) {
         }
 
         const { command, args, options } = parsed;
-        const action = commands[command];
+        const commandDef = commands[command];
+        const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
 
         if (action) {
-            const result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
+
+            let result;
+            if (!isLastInPipe) {
+                // If this is not the last command, turn on piping mode
+                isPiping = true;
+                pipeBuffer = [];
+            }
+
+            result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
             previousOutput = result;
 
-            if (isLastInPipe) {
-                
-                if (typeof result === 'string') {
-                    // Check if this single string result is the ls-grid block
-                    const isLsGrid = result.includes('class="ls-grid-container"');
-                    print(result, 'info', isLsGrid);
-                } else if (Array.isArray(result)) {
-                    // For each line in the array, check if it looks like HTML
-                    result.forEach(line => {
-                        const lineStr = String(line);
-                        // A simple heuristic: if it has tags, treat it as HTML.
-                        const allowHtmlOnThisLine = lineStr.includes('<') && lineStr.includes('>');
-                        print(lineStr, 'info', allowHtmlOnThisLine);
-                    });
+            if (isPiping) {
+                isPiping = false; // Turn off piping mode after the command runs
+                // Use the explicit return value if it exists (for ls, history, etc.),
+                // otherwise use what was captured from print() calls (for help, about, etc.).
+                previousOutput = Array.isArray(result) && result.length > 0 ? result : pipeBuffer;
+            } else {
+                // This is the last command, so we print its result.
+                if (result) {
+                    if (typeof result === 'string') {
+                        const isLsGrid = result.includes('class="ls-grid-container"');
+                        print(result, 'info', isLsGrid);
+                    } else if (Array.isArray(result)) {
+                        result.forEach(line => {
+                            const lineStr = String(line);
+                            const allowHtml = lineStr.includes('<') && lineStr.includes('>');
+                            print(lineStr, 'info', allowHtml);
+                        });
+                    }
                 }
             }
         } else {
@@ -1993,23 +2752,55 @@ function handleSudoCheck(originalCommandStr) {
 }
 
 async function executeLine(line) {
-    const commandSegments = line.split(';').filter(cmd => cmd.trim() !== '');
-    
     if (line.trim() === "") {
         print(`${full_path} `);
         print("");
         return;
     }
     
-    print(`${full_path} ${line}`); // Echo the full line once
+    print(`${full_path} ${line}`);
+
+    const commandTokens = tokenizeLine(line);
+    let lastCommandSuccess = true;
 
     awaiting();
-    for (const segment of commandSegments) {
-        await executePipeline(segment);
+
+    for (const token of commandTokens) {
+        
+        // --- Decision Block: Decide whether to run the current command ---
+        if (lastCommandSuccess) {
+            // If the PREVIOUS command succeeded...
+            // We run the current command. The only exception is if the previous separator was '||',
+            // in which case the OR chain has already succeeded, so we start skipping.
+            if (token.previousSeparator === '&&') {
+                lastCommandSuccess = true; // The success of the OR chain carries forward
+                continue; // Skip this command
+            }
+        } else { // if lastCommandSuccess is false
+            // If the PREVIOUS command failed...
+            // We run the current command UNLESS the previous separator was '&&'.
+            if (token.previousSeparator === '||') {
+                lastCommandSuccess = false; // The failure of the AND chain carries forward
+                continue; // Skip this command
+            }
+        }
+        
+        // --- Execution ---
+        // If we passed the checks above, we are cleared to run.
+        let result = await executePipeline(token.command);
+        lastCommandSuccess = (result !== false);
+        
+        // Pass the separator of the command we just ran to the next token in the list.
+        const nextTokenIndex = commandTokens.indexOf(token) + 1;
+        if (commandTokens[nextTokenIndex]) {
+            commandTokens[nextTokenIndex].previousSeparator = token.separator;
+        }
     }
-    if (!commanding) { // If no async command like wget is running
-        done();
-        print("");
+    
+    // After the entire sequence is finished (or skipped), restore the prompt.
+    if (!commanding) {
+      done();
+      print("");
     }
 }
 
@@ -2088,6 +2879,7 @@ function done() {
     setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
   }
   blockCursor.classList.remove('no-blink'); // Re-enable blinking
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
 // SETTINGS 
@@ -2096,7 +2888,8 @@ function saveDefaultSettings() {
     default_search_engine: default_search_engine,
     default_mode: default_mode,
   };
-  chrome.storage.sync.set({ settings });
+  // chrome.storage.sync.set({ settings }); // Old
+  setSetting('settings', settings); // New
 }
 
 function saveCommandHistory() {
@@ -2155,99 +2948,228 @@ async function refreshMicrosoftToken(refreshToken) {
 function showPrivacyUpdateNotice() {
     print("Our Privacy Policy has been updated.", "highlight");
     // print("Please review the changes at: ")
-    print("Please review the changes at: https://www.tianyibrad.com/docs/start_terminal_privacy_policy.", "info");
+    print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
     print("Type 'privacy-ok' to dismiss this message.", "hint");
     print("");
 }
 
 // Load all settings 
+// Old LoadSettings function, kept for reference
+// TODO will be removed in the future
+// async function loadSettings() {
+//   // 1. Get the complete bookmark tree asynchronously
+//   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+//   const trueRoot = bookmarkTree[0];
+  
+//   // --- FIX STARTS HERE ---
+  
+//   // Correctly assign the fetched bookmark tree to the global 'root' variable
+//   root = trueRoot; 
+
+//   // Set the home directory '~' to be the "Favorites bar"
+//   if (trueRoot.children && trueRoot.children.length > 0) {
+//     homeDirNode = trueRoot.children[0];
+//   } else {
+//     // Fallback: if there are no children, home is the same as the root.
+//     homeDirNode = root; 
+//   }
+
+//   // Set the starting location to the home directory.
+//   current = homeDirNode;
+//   // The path must reflect the full hierarchy, starting from the now-defined 'root'.
+//   path = [root, homeDirNode];
+
+//   // --- FIX ENDS HERE ---
+
+//   const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'cursorStyle']);
+  
+//   // 3. Restore bookmark path
+//   if (data.bookmarkPath) {
+//     let restoredPathIsValid = true;
+//     let tempCurrent = root; // Start from the valid root
+//     let tempPath = [root];
+
+//     // Starting from the root, find each child by its ID to rebuild the path
+//     for (let i = 1; i < data.bookmarkPath.length; i++) {
+//       const nextId = data.bookmarkPath[i];
+//       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
+
+//       if (nextNode && nextNode.children) { // Ensure the node still exists and is a folder
+//         tempCurrent = nextNode;
+//         tempPath.push(nextNode);
+//       } else {
+//         restoredPathIsValid = false; // If a folder in the path was deleted, restoration fails
+//         break;
+//       }
+//     }
+
+//     if (restoredPathIsValid) {
+//       current = tempCurrent;
+//       path = tempPath;
+//     }
+//   }
+
+//   if (data.aliases) {
+//     aliases = data.aliases;
+//   }
+    
+//   if (data.settings) {
+//     default_mode = data.settings.default_mode ?? false;
+//     default_search_engine = data.settings.default_search_engine ?? "google";
+//   }
+
+//   if (data.commandHistory) {
+//     previousCommands.push(...data.commandHistory);
+//   }
+
+//   if (data.environmentVars) {
+//     environmentVars = data.environmentVars;
+//   }
+
+//   if (data.msAuth && data.msAuth.tokenInfo) {
+//     let currentAuth = data.msAuth;
+//     if (Date.now() > currentAuth.expirationTime) {
+//       // Token has expired, try to refresh it
+//       currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
+//     }
+
+//     if (currentAuth) {
+//       const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+//       user = user_info;
+//       print(`Welcome back, ${user_info}`, "success");
+//     }
+//   }
+
+//   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+//     // If the privacy policy version does not match, show a notice
+//     setTimeout(() => showPrivacyUpdateNotice(), 100);
+//   }
+
+//   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  
+//   if (data.theme) {
+//     promptTheme = data.theme;
+//   }
+  
+//   if (data.imgAPI) {
+//     promptBgRandomAPI = data.imgAPI;
+//   }
+//   if (localData.customBackground) {
+//     promptOpacity = data.background_opacity;
+//     applyTheme(data.theme);
+//     applyBackground(localData.customBackground, data.background_opacity);
+//   } else {
+//     promptOpacity = data.background_opacity;
+//     applyTheme(promptTheme);
+//     applyBackground(null, promptOpacity); // Apply default background
+//   }
+
+//   //! Apply Cursor must be after applyTheme
+//   if (data.cursorStyle) {
+//     applyCursorStyle(data.cursorStyle);
+//   } else {
+//     applyCursorStyle('block'); // Apply default if nothing is saved
+//   }
+
+//   bgUploadInput.addEventListener('change', handleFileSelect);
+// }
+
 async function loadSettings() {
-  // 1. 异步获取完整的书签树
+  // 1. Get the complete bookmark tree asynchronously
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
-  root = bookmarkTree[0];
-  current = root; // 默认在根目录
-  path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion']);
-// 3. 恢复书签路径
+  const trueRoot = bookmarkTree[0];
+  
+  root = trueRoot; 
+
+  // Set the home directory '~' to be the "Favorites bar"
+  if (trueRoot.children && trueRoot.children.length > 0) {
+    homeDirNode = trueRoot.children[0];
+  } else {
+    homeDirNode = root; 
+  }
+
+  current = homeDirNode;
+  path = [root, homeDirNode];
+
+  // 2. Load configuration mode first
+  const configData = await chrome.storage.sync.get(['configMode', 'autosyncEnabled']);
+  configMode = configData.configMode || 'storage';
+  autosyncEnabled = configData.autosyncEnabled || false;
+
+  // 3. Load all settings using the getSetting router, which respects configMode
+  aliases = await getSetting('aliases') || {};
+  environmentVars = await getSetting('environmentVars') || {};
+  promptTheme = await getSetting('theme') || 'default';
+  
+  const loadedSettings = await getSetting('settings');
+  if (loadedSettings) {
+      default_mode = loadedSettings.default_mode ?? false;
+      default_search_engine = loadedSettings.default_search_engine ?? "google";
+  } else {
+      default_mode = false;
+      default_search_engine = "google";
+  }
+  
+  const loadedCursorStyle = await getSetting('cursorStyle');
+  applyCursorStyle(loadedCursorStyle || 'block');
+
+
+  // 4. Load other non-routable settings directly from storage
+  const data = await chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion']);
+  
+  if (data.commandHistory) {
+    previousCommands.push(...data.commandHistory);
+  }
+
+  // 5. Restore last used bookmark path
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
     let tempCurrent = root;
     let tempPath = [root];
-
-    // 从根目录开始，根据ID逐级向下查找，重建路径
     for (let i = 1; i < data.bookmarkPath.length; i++) {
       const nextId = data.bookmarkPath[i];
       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
-
-      if (nextNode && nextNode.children) { // 确保路径中的节点仍然存在且是文件夹
+      if (nextNode && nextNode.children) {
         tempCurrent = nextNode;
         tempPath.push(nextNode);
       } else {
-        restoredPathIsValid = false; // 如果路径中某个文件夹被删了，则恢复失败
+        restoredPathIsValid = false;
         break;
       }
     }
-
     if (restoredPathIsValid) {
       current = tempCurrent;
       path = tempPath;
     }
   }
 
-  if (data.aliases) {
-    aliases = data.aliases;
-  }
-    
-  if (data.settings) {
-    default_mode = data.settings.default_mode ?? false;
-    default_search_engine = data.settings.default_search_engine ?? "google";
-  }
-
-  if (data.commandHistory) {
-    previousCommands.push(...data.commandHistory);
-  }
-
-  if (data.environmentVars) {
-    environmentVars = data.environmentVars;
-  }
-
+  // 6. Handle Microsoft Account session
   if (data.msAuth && data.msAuth.tokenInfo) {
     let currentAuth = data.msAuth;
     if (Date.now() > currentAuth.expirationTime) {
-      // Token 过期，尝试刷新
       currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
     }
-
     if (currentAuth) {
-      const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
-      user = user_info;
-      print(`Welcome back, ${user_info}`, "success");
+      user = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+      print(`Welcome back, ${user}`, "success");
     }
   }
-
+  
+  // 7. Handle Privacy Policy check
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
-    // 如果隐私政策版本不匹配，显示提示并更新版本
     setTimeout(() => showPrivacyUpdateNotice(), 100);
   }
 
+  // 8. Load and apply background settings
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  applyTheme(promptTheme); // Apply theme loaded via getSetting
   
-  if (data.theme) {
-    promptTheme = data.theme;
-  }
-  console.log(data.imgAPI);
-  if (data.imgAPI) {
-    promptBgRandomAPI = data.imgAPI;
-    console.log("Background image API set to:", promptBgRandomAPI);
-  }
+  if (data.imgAPI) promptBgRandomAPI = data.imgAPI;
+  promptOpacity = data.background_opacity || 0.15;
+  
   if (localData.customBackground) {
-    // promptBg = localData.customBackground;
-    promptOpacity = data.background_opacity;
-    applyTheme(data.theme);
-    applyBackground(localData.customBackground, data.background_opacity);
+    applyBackground(localData.customBackground, promptOpacity);
   } else {
-    promptOpacity = data.background_opacity;
-    applyTheme(promptTheme);
     applyBackground(null, promptOpacity); // Apply default background
   }
 
@@ -2281,45 +3203,172 @@ function clearSuggestions() {
 }
 
 // --- Keyboard Listeners ---
+// --- Keyboard Listeners ---
 document.body.addEventListener("keydown", async e => {
 
   if (isEditing) {
-    // Save: Ctrl+S or Cmd+S
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      const newTitle = editorTitleInput.value;
-      const newUrl = editorUrlInput.value;
+    // --- NANO MODE LOGIC ---
+    if (activeEditor === 'nano') {
+        // For nano, we only intercept our specific shortcuts.
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    editorStatus.textContent = "Saving...";
+    
+    // const targetBookmarkNode = findChildByTitleFileOrDir(current.children || [], editorTitleInput.value) || {id: editingBookmarkId};
+    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
-      editorStatus.textContent = "Saving...";
-      chrome.bookmarks.update(editingBookmarkId, { title: newTitle, url: newUrl }, (updatedNode) => {
+    let updatePayload;
+
+    if (isSettingsFile) {
+        // --- NEW SAVE LOGIC for settings files ---
+        const textarea = document.getElementById('editor-textarea');
+        try {
+            // Validate JSON before saving
+            const parsedJson = JSON.parse(textarea.value);
+            const stringifiedJson = JSON.stringify(parsedJson); // Minified for URL
+            const dataUrl = `about:blank#${encodeURIComponent(stringifiedJson)}`;
+            updatePayload = { url: dataUrl }; // Only update the URL
+        } catch (err) {
+            editorStatus.textContent = `Error: Invalid JSON! ${err.message}`;
+            return;
+        }
+    } else {
+        // --- ORIGINAL SAVE LOGIC for regular bookmarks ---
+        updatePayload = {
+            title: editorTitleInput.value,
+            url: editorUrlInput.value
+        };
+    }
+
+    chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
         if (chrome.runtime.lastError) {
-          editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+            editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
         } else {
-          editorStatus.textContent = `Saved: ${updatedNode.title}`;
-          // Refresh current directory silently in the background
-          chrome.bookmarks.getSubTree(current.id, (results) => {
-              if (results && results[0]) {
-                current = results[0];
-                path[path.length - 1] = current;
-              }
-          });
+            editorStatus.textContent = `Saved: ${updatedNode.title}`;
+            unsavedChanges = false;
+            // If title was changed, update nano's state
+            if (updatePayload.title) editorTitleInput.value = updatePayload.title;
+            editingBookmarkId = updatedNode.id; // Update ID in case it changes (rare)
+            
+            // Silently refresh the current directory's children
+            chrome.bookmarks.getSubTree(current.id, (results) => {
+                if (results && results[0]) current = results[0];
+            });
         }
       });
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+            e.preventDefault();
+            exitEditor();
+        }
+        // For all other keys, we do NOT call preventDefault and do NOT return.
+        // This allows the browser to handle typing and cursor movement normally.
+        return;
     }
 
-    // Exit: Ctrl+X
-    if (e.ctrlKey && e.key.toLowerCase() === 'x') {
-      e.preventDefault();
-      // Exit editing mode
-      isEditing = false;
-      editingBookmarkId = null;
+    // --- VIM MODE LOGIC ---
+    if (activeEditor === 'vim') {
+        const textarea = document.getElementById('editor-textarea');
+        const commandLine = document.getElementById('editor-command-line');
+        const commandLineInput = document.getElementById('editor-command-line-input');
 
-      // Switch views back
-      editorView.style.display = "none";
-      terminal.style.display = "block";
-      done();
+        // -- INSERT MODE --
+        if (vimMode === 'INSERT') {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                vimMode = 'NORMAL';
+                textarea.readOnly = true;
+                document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+                textarea.focus();
+            }
+            // For any other key in INSERT mode, we do nothing and let the browser handle it.
+            // This allows typing, arrow keys, backspace, etc. to work naturally.
+            return;
+        }
+
+        // For NORMAL and COMMAND mode, we control everything.
+        e.preventDefault();
+
+        // -- COMMAND MODE --
+        if (vimMode === 'COMMAND') {
+            if (e.key === 'Escape') {
+                vimMode = 'NORMAL';
+                commandLine.style.display = 'none';
+                commandLineInput.textContent = '';
+                textarea.focus();
+                document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+            } else if (e.key === 'Enter') {
+                const command = commandLineInput.textContent.trim().substring(1);
+                // (Your existing :w, :q, :wq, :q! logic is mostly correct and can be placed here)
+                // Let's ensure the save logic is complete:
+                if (command === 'w' || command === 'wq') {
+                    editorStatus.textContent = "Saving...";
+                    try {
+                        const newData = JSON.parse(textarea.value);
+                        const updatePayload = {
+                            ...(newData.title !== undefined && { title: newData.title }),
+                            ...(newData.url !== undefined && { url: newData.url })
+                        };
+                        chrome.bookmarks.update(editingBookmarkId, updatePayload, (node) => {
+                            if (chrome.runtime.lastError) {
+                                editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+                            } else {
+                                editorStatus.textContent = `Saved: ${node.title}`;
+                                unsavedChanges = false;
+                                if (command === 'wq') exitEditor();
+                            }
+                        });
+                    } catch (err) { editorStatus.textContent = `Error: Invalid JSON! ${err.message}`; }
+                } else if (command === 'q') {
+                    if (unsavedChanges) {
+                        editorStatus.textContent = "Unsaved changes! Use ':q!' to discard.";
+                    } else {
+                        exitEditor();
+                    }
+                } else if (command === 'q!') {
+                    unsavedChanges = false;
+                    exitEditor();
+                }
+                // Exit command mode after execution
+                if (command !== 'q' || !unsavedChanges) {
+                    vimMode = 'NORMAL';
+                    commandLine.style.display = 'none';
+                    commandLineInput.textContent = '';
+                    textarea.focus();
+                    document.getElementById('editor-footer').innerHTML = `<span>NORMAL MODE - Press 'i' to insert, ':' for commands</span>`;
+                }
+            } else if (e.key === 'Backspace') {
+                if (commandLineInput.textContent.length > 1) {
+                    commandLineInput.textContent = commandLineInput.textContent.slice(0, -1);
+                }
+            } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+                commandLineInput.textContent += e.key;
+            }
+            return;
+        }
+
+        // -- NORMAL MODE --
+        if (vimMode === 'NORMAL') {
+            if (e.key === 'i') {
+                vimMode = 'INSERT';
+                textarea.readOnly = false;
+                document.getElementById('editor-footer').innerHTML = `<span style="background-color: #8ae234; color: #000;">-- INSERT --</span>`;
+                setTimeout(() => textarea.focus(), 0);
+            } else if (e.key === ':') {
+                vimMode = 'COMMAND';
+                commandLine.style.display = 'block';
+                commandLineInput.textContent = ':';
+                commandLineInput.focus();
+                // Logic to set cursor to end
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(commandLineInput);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
     }
-    return; // Stop further processing in editing mode
+    return; 
   }
 
 
@@ -2362,23 +3411,123 @@ document.body.addEventListener("keydown", async e => {
   }
 
   if (commanding) { // If a command is running
-    if (control_cmd && e.key.toLowerCase() === "c") {
+    if (e.ctrlKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         interrupt();
-    } else if (e.key !== "Control" && e.key !== "Meta") { // Allow modifier keys
-        // e.preventDefault(); // Optionally prevent other input during command execution
     }
     return; // Most keys ignored during command execution
   }
+  
+  // --- NEW EMACS-STYLE SHORTCUTS ---
+  if (e.ctrlKey && !e.altKey && !e.shiftKey) {
+    // console.log("Key pressed:", e.key);
+      switch (e.key.toLowerCase()) {
+          case 'a': // Move to beginning of line
+              e.preventDefault();
+              cursorPosition = 0;
+              updateInputDisplay();
+              return;
+          case 'e': // Move to end of line
+              e.preventDefault();
+              cursorPosition = buffer.length;
+              updateInputDisplay();
+              return;
+          case 'u': // Delete from cursor to start of line
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  yankBuffer = buffer.substring(0, cursorPosition);
+                  buffer = buffer.substring(cursorPosition);
+                  cursorPosition = 0;
+                  updateInputDisplay();
+              }
+              return;
+          case 'k': // Delete from cursor to end of line
+              e.preventDefault();
+              yankBuffer = buffer.substring(cursorPosition);
+              buffer = buffer.substring(0, cursorPosition);
+              updateInputDisplay();
+              return;
+          case 'w': // Delete word before cursor
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  const originalCursorPos = cursorPosition;
+                  let endOfWord = cursorPosition;
+                  while (endOfWord > 0 && buffer[endOfWord - 1] === ' ') {
+                      endOfWord--;
+                  }
+                  let startOfWord = endOfWord;
+                  while (startOfWord > 0 && buffer[startOfWord - 1] !== ' ') {
+                      startOfWord--;
+                  }
+                  yankBuffer = buffer.substring(startOfWord, originalCursorPos);
+                  buffer = buffer.substring(0, startOfWord) + buffer.substring(originalCursorPos);
+                  cursorPosition = startOfWord;
+                  updateInputDisplay();
+              }
+              return;
+          case 'y': // Paste (yank)
+              e.preventDefault();
+              if (yankBuffer) {
+                  buffer = buffer.substring(0, cursorPosition) + yankBuffer + buffer.substring(cursorPosition);
+                  cursorPosition += yankBuffer.length;
+                  updateInputDisplay();
+              }
+              return;
 
+          case 'arrowleft':
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  updateInputDisplay();
+              }
+              return;
 
-  if (e.key === "ArrowUp") {
+          case 'arrowright':
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+
+  if (e.altKey && !e.ctrlKey) {
+      switch (e.key.toLowerCase()) {
+          case 'b': // Move back one word
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  updateInputDisplay();
+              }
+              return;
+          case 'f': // Move forward one word
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+  // --- END OF NEW SHORTCUTS ---
+
+  // Arrow keys and their Ctrl equivalents
+  if (e.key === "ArrowUp" || (e.ctrlKey && e.key.toLowerCase() === 'p')) {
     e.preventDefault();
     if (previousCommands.length > 0) {
-      if (previousCommandIndex === 0 && buffer.length > 0) {
-          // If currently typing something new, save it as a draft before navigating history
-          // This behavior can be refined. For now, simple history navigation.
-      }
       previousCommandIndex = Math.max(-previousCommands.length, previousCommandIndex - 1);
       buffer = previousCommands.at(previousCommandIndex) || "";
       cursorPosition = buffer.length;
@@ -2386,62 +3535,48 @@ document.body.addEventListener("keydown", async e => {
     }
     return;
   }
-  if (e.key === "ArrowDown") {
+  if (e.key === "ArrowDown" || (e.ctrlKey && e.key.toLowerCase() === 'n')) {
     e.preventDefault();
     if (previousCommands.length > 0 && previousCommandIndex < 0) {
         previousCommandIndex = Math.min(0, previousCommandIndex + 1);
-        if (previousCommandIndex === 0) {
-            buffer = ""; // Or restore a draft if implemented
-        } else {
-            buffer = previousCommands.at(previousCommandIndex) || "";
-        }
-    } else { // At the "bottom" of history (or no history), clear buffer
+        buffer = (previousCommandIndex === 0) ? "" : (previousCommands.at(previousCommandIndex) || "");
+    } else { 
         buffer = "";
     }
     cursorPosition = buffer.length;
     updateInputDisplay();
     return;
   }
-  if (e.key === "ArrowLeft") {
+  if (e.key === "ArrowLeft" || (e.ctrlKey && e.key.toLowerCase() === 'b')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
       updateInputDisplay();
-    } // Allow default if composing for IME navigation
+    }
     return;
   }
-  if (e.key === "ArrowRight") {
+  if (e.key === "ArrowRight" || (e.ctrlKey && e.key.toLowerCase() === 'f')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
       updateInputDisplay();
-    } // Allow default if composing
+    }
     return;
   }
 
   // Copy: Ctrl + Shift + C or Cmd + Shift + C
   if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
     e.preventDefault();
-    // Get Selected Text
     const selection = window.getSelection();
-    // remove white spaces after last non-space character and before \n), not only the space of the last line, but every line
     const selectedText = selection.toString()
       .split('\n')
       .map(line => line.replace(/\s+$/, ''))
       .join('\n');
     if (selectedText) {
-      navigator.clipboard.writeText(selectedText).then(() => {
-        // print("Copied to clipboard: " + selectedText, "success");
-      }).catch(err => {
-        // print("Failed to copy: " + err, "error");
-      });
-    } else {
-      // print("Nothing selected to copy.", "warning");
+      navigator.clipboard.writeText(selectedText);
     }
-
-    // Unselect text after copying
     selection.removeAllRanges();
     return;
   }
@@ -2453,8 +3588,8 @@ document.body.addEventListener("keydown", async e => {
         cursorPosition = 0;
         print(`${full_path} ${typedText.textContent}^C`);
         updateInputDisplay();
-    } else { // If buffer is empty, print prompt again (classic ^C behavior)
-        print(full_path); // Just print the prompt
+    } else { 
+        print(full_path);
     }
     return;
   }
@@ -2465,132 +3600,120 @@ document.body.addEventListener("keydown", async e => {
     return;
   }
   
-  if (e.key === "Tab") {
+  // --- FINAL FIX v5: Replace the entire 'if (e.key === "Tab")' block with this ---
+
+if (e.key === "Tab") {
     e.preventDefault();
     clearSuggestions();
 
-    // --- FIX: Define command categories for smarter filtering ---
-    const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
-    // For file-only commands, we add a special "./" type for executable bookmarks
-    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./"];
-    // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
-
     const relevantInput = buffer.substring(0, cursorPosition);
-    const pre_parts = relevantInput.trimStart().split(/\s+/);
-    let commandName = pre_parts[0] || "";
+    const parts = relevantInput.trimStart().split(/\s+/);
+    const commandName = parts[0] || "";
+    const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
 
-    let prefixPath = "";
-    let namePrefixToComplete = "";
-    let currentContextChildren = current.children;
-    let effectiveCommandType = "";
-    let startOfBaseArgumentStringInRelevantInput = 0;
-
-    const allCompletableCommands = [
-        ...DIR_ONLY_COMMANDS, 
-        ...FILE_ONLY_COMMANDS, 
-        "ls", "rm", "mv", "cp", "touch" // Manually add universal commands
-    ];
-
-    if (commandName.startsWith("./")) {
-        effectiveCommandType = "./"; // Use the special type we defined
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
-    } else if (allCompletableCommands.includes(commandName)) {
-        effectiveCommandType = commandName;
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
-    } else {
-        return;
-    }
-
-    let baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
-    if (!baseArgumentString && relevantInput.endsWith(" ")) {
-        namePrefixToComplete = "";
-        prefixPath = "";
-    } else {
-        const lastSlashPos = baseArgumentString.lastIndexOf('/');
-        if (lastSlashPos > -1) {
-            prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
-            namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
-        } else {
-            prefixPath = "";
-            namePrefixToComplete = baseArgumentString;
-        }
-    }
-    
-    currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
-    if (!currentContextChildren) currentContextChildren = [];
-
-    let matches = currentContextChildren
-        .filter(child => {
-            const title = child.title || "";
-            if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-
-            // --- FIX: New, smarter filtering logic based on command type ---
-            const isDirectory = !!child.children;
-
-            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return isDirectory; // Must be a directory
-            }
-            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return !isDirectory; // Must be a file
-            }
-
-            // Default case for commands like ls, rm, mv, cp: show everything
-            return true;
-        })
-        .map(child => child.title)
-        .sort();
-    
-    // The rest of the logic for displaying matches remains the same...
-    if (matches.length === 1) {
-        const match = matches[0];
-        const completion = match + " ";
-
-        const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-        const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
-        
-        buffer = newBuffer;
-        cursorPosition = replaceFrom + prefixPath.length + completion.length;
-        updateInputDisplay();
-
-    } else if (matches.length > 1) {
-        let commonPrefix = matches[0];
-        for (let i = 1; i < matches.length; i++) {
-            while (!matches[i].toLowerCase().startsWith(commonPrefix.toLowerCase())) {
-                commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
-            }
-        }
-
-        if (commonPrefix.length > namePrefixToComplete.length) {
-            const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-            const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + commonPrefix + buffer.substring(cursorPosition);
+    // --- PRIORITY 1: Sub-command/Argument Completion ---
+    // Check if we are typing arguments for a command that has a suggestion engine.
+    if (!isTypingFirstWord) {
+        const commandDef = commands[commandName];
+        if (commandDef && typeof commandDef === 'object' && commandDef.suggestions) {
+            const currentArgs = parts.slice(1);
             
-            buffer = newBuffer;
-            cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
-            updateInputDisplay();
+            const suggestionResult = commandDef.suggestions(currentArgs);
+            if (suggestionResult && suggestionResult.length > 0) {
+                const argToComplete = currentArgs[currentArgs.length - 1] || "";
+                const matches = suggestionResult.filter(s => s.toLowerCase().startsWith(argToComplete.toLowerCase()));
+
+                if (matches.length === 1) {
+                    currentArgs[currentArgs.length - 1] = matches[0];
+                    const newText = commandName + " " + currentArgs.join(" ").trim() + " ";
+                    buffer = newText;
+                    cursorPosition = buffer.length;
+                    updateInputDisplay();
+                } else if (matches.length > 1) {
+                    suggestionsContainer.textContent = matches.join("   ");
+                    suggestionsContainer.style.display = "block";
+                }
+                return; // Sub-command handled, exit.
+            }
+        }
+    }
+
+    // --- PRIORITY 2 & 3: Path or Top-Level Command Completion ---
+    // This section uses the logic from your trusted, working code as a base.
+    const DIR_ONLY_COMMANDS = ["cd", "rmdir", "tree"];
+    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "vim", "./"];
+    const ALL_CONTEXT_COMMANDS = ["ls", "rm", "mv", "cp", "touch", "find"];
+    
+    let effectiveCommandType = "";
+    if (commandName.startsWith('./') || commandName.startsWith('/') || commandName.startsWith('~/')) {
+        effectiveCommandType = "./"; // Treat all path executions as file-consuming
+    } else if ([...DIR_ONLY_COMMANDS, ...FILE_ONLY_COMMANDS, ...ALL_CONTEXT_COMMANDS].includes(commandName)) {
+        effectiveCommandType = commandName;
+    }
+
+    // If we have a context for file completion, run it.
+    if (effectiveCommandType) {
+        let pathPrefix = "";
+        let nameToComplete = "";
+        
+        let pathArgumentString;
+        if (effectiveCommandType === "./") {
+            pathArgumentString = relevantInput.substring(relevantInput.match(/^(.\/|\/|~\/)/)[0].length);
+        } else {
+            const commandEndIndex = relevantInput.indexOf(commandName) + commandName.length;
+            pathArgumentString = relevantInput.substring(commandEndIndex).trimStart();
+        }
+
+        const lastSlashPos = pathArgumentString.lastIndexOf('/');
+        if (lastSlashPos > -1) {
+            pathPrefix = pathArgumentString.substring(0, lastSlashPos + 1);
+            nameToComplete = pathArgumentString.substring(lastSlashPos + 1);
+        } else {
+            pathPrefix = "";
+            nameToComplete = pathArgumentString;
         }
         
-        let outputLineContent = "";
-        matches.forEach(m => {
-             const matchedNode = currentContextChildren.find(c => c.title === m);
-             outputLineContent += (matchedNode && matchedNode.children ? m + "/" : m) + "   ";
-        });
+        let pathResult = findNodeByPath(pathPrefix || ".");
+        if (!pathResult || !pathResult.node || !pathResult.node.children) return;
+        const contextChildren = pathResult.node.children;
         
-        suggestionsContainer.textContent = outputLineContent.trim();
-        suggestionsContainer.style.display = "block";
+        const matches = contextChildren.filter(child => {
+            const title = child.title || "";
+            if (!title.toLowerCase().startsWith(nameToComplete.toLowerCase())) return false;
+            const isDirectory = !!child.children;
+            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) return isDirectory;
+            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) return !isDirectory;
+            return true;
+        }).map(child => child.title).sort();
+        
+        if (matches.length === 1) {
+            const match = matches[0];
+            const isDir = !!(contextChildren.find(c => c.title === match)?.children);
+            const completion = match + (isDir ? "/" : " ");
+            const textBeforePath = relevantInput.substring(0, relevantInput.length - nameToComplete.length);
+            buffer = textBeforePath + completion + buffer.substring(cursorPosition);
+            cursorPosition = (textBeforePath + completion).length;
+            updateInputDisplay();
+        } else if (matches.length > 1) {
+            suggestionsContainer.textContent = matches.map(m => (contextChildren.find(c => c.title === m)?.children ? m + "/" : m)).join("   ");
+            suggestionsContainer.style.display = "block";
+        }
+
+    } else if (isTypingFirstWord) {
+        // Fallback for first word if it's not a path or a file-op: complete from all commands/aliases
+        const allCommandsAndAliases = [...Object.keys(commands), ...Object.keys(aliases)];
+        const matches = allCommandsAndAliases.filter(c => c.toLowerCase().startsWith(commandName.toLowerCase()));
+
+        if (matches.length === 1) {
+            buffer = matches[0] + " " + buffer.substring(cursorPosition);
+            cursorPosition = matches[0].length + 1;
+            updateInputDisplay();
+        } else if (matches.length > 1) {
+            suggestionsContainer.textContent = matches.join("   ");
+            suggestionsContainer.style.display = "block";
+        }
     }
-    return;
 }
-
-
-  if (control_cmd || e.metaKey || e.altKey) {
-    if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'v') {
-        // Paste handled by event listener
-    } else if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'c' && window.getSelection().toString().length > 0) {
-        // Allow native copy if text is selected
-    } else {
-       // return; // Let other Ctrl/Meta/Alt shortcuts behave normally or be ignored
-    }
-  }
 
   if (isComposing) return;
 
@@ -2598,19 +3721,15 @@ document.body.addEventListener("keydown", async e => {
     clearSuggestions(); 
     e.preventDefault();
     if (cursorPosition > 0) {
-      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
-      // Basic backspace, could be enhanced for ^H like behavior if needed
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
       updateInputDisplay();
     }
-  } else // in script.js, REPLACE the 'if (e.key === "Enter")' block in the keydown listener with this final version.
-
-if (e.key === "Enter") {
+  } else if (e.key === "Enter") {
     clearSuggestions();
     e.preventDefault();
-    if (commanding) return; // Don't process new commands if one is already running
+    if (commanding) return;
 
     const commandToProcess = buffer.trim();
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
@@ -2624,7 +3743,7 @@ if (e.key === "Enter") {
     updateInputDisplay();
 
     executeLine(commandToProcess);
-} else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     typingIO_cursor();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
@@ -2915,6 +4034,7 @@ function welcomeMsg() {
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
+    print("Type 'about' for more information about start-terminal.");
     print("");
     print("Default Search Engine:");
     print(`  - Current: ${default_search_engine}`, "highlight");
@@ -2941,15 +4061,24 @@ document.body.addEventListener("click", function(event) {
 function applyTheme(themeName) {
     document.body.className = `theme-${themeName}`;
     promptTheme = themeName;
+    applyCursorStyle(cursorStyle); // Reapply cursor style to ensure it matches the theme
     saveTheme();
 }
 
+function applyCursorStyle(style) {
+    document.body.classList.remove('cursor-style-block', 'cursor-style-bar', 'cursor-style-underline');
+    document.body.classList.add(`cursor-style-${style}`);
+    cursorStyle = style;
+}
+
 function saveTheme() {
-  chrome.storage.sync.set({ theme: promptTheme });
+  // chrome.storage.sync.set({ theme: promptTheme });
+  setSetting('theme', promptTheme);
 }
 
 function saveEnvironmentVars() {
-  chrome.storage.sync.set({ environmentVars: environmentVars });
+  // chrome.storage.sync.set({ environmentVars: environmentVars });
+  setSetting('environmentVars', environmentVars);
 }
 
 function applyBackground(imageDataUrl, opacity) {
@@ -3017,8 +4146,8 @@ function checkForUpdates() {
 }
 
 async function applyUpdates() {
-  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y|n] ");
-  print(`Extension needs to be reloaded to update, reload now? [Y|n] ${user_input_content}`)
+  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y/n] ");
+  print(`Extension needs to be reloaded to update, reload now? [Y/n] ${user_input_content}`)
   if (result) {
     chrome.runtime.onUpdateAvailable.addListener((details) => {
       print(`Fetched: ${details.version}`, 'info');

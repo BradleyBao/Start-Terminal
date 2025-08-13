@@ -434,6 +434,30 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
+/**
+ * Finds URLs in a string and wraps them in <a> tags.
+ * @param {string} text - The text to process.
+ * @returns {{html: string, linksFound: boolean}} An object containing the new HTML string and a flag indicating if links were found.
+ */
+function linkify(text) {
+    // A robust regex to find URLs (http, https, www)
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let linksFound = false;
+
+    // Use .replace() to find all URLs and wrap them in an <a> tag
+    const html = text.replace(urlRegex, (url) => {
+        linksFound = true;
+        let href = url;
+        // If the URL starts with 'www.', prepend 'http://' for the href attribute to make it a valid link
+        if (href.startsWith('www.')) {
+            href = 'http://' + href;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="terminal-link">${url}</a>`;
+    });
+
+    return { html, linksFound };
+}
+
 // Function to update the input display (typedText and blockCursor)
 function updateInputDisplay() {
   if (isComposing) {
@@ -1911,14 +1935,13 @@ DESCRIPTION
     const titleArt = start_terminal_ascii.split('\n');
 
     titleArt.forEach(line => print(line, 'highlight'));
-    // print(titleArt);
     print(""); // Spacer
 
     // Gather all details into an array of objects
     const details = [
         { label: "Version", value: manifest.version },
         { label: "Author", value: manifest.author },
-        { label: "License", value: "MIT License" }, // You can change this if you use a different license
+        { label: "License", value: "MIT License" },
         { label: "Homepage", value: manifest.homepage_url },
         { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
         { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
@@ -1929,13 +1952,26 @@ DESCRIPTION
         { label: "Language", value: navigator.language },
     ];
 
-    // Calculate the longest label for alignment
     const longestLabel = details.reduce((max, item) => Math.max(max, getVisualWidth(item.label)), 0);
+    const urlLabels = ["Homepage", "Repository", "Privacy Policy"];
 
     // Print each detail in a formatted key-value pair
     details.forEach(item => {
         const padding = ' '.repeat(longestLabel - getVisualWidth(item.label));
-        const line = `<span class="output-folder">${item.label}${padding}</span> : ${item.value}`;
+        let displayValue;
+
+        // --- START OF FIX ---
+        // Check if the current item's label is one that should contain a URL.
+        if (urlLabels.includes(item.label) && typeof item.value === 'string' && item.value.startsWith('http')) {
+            // If it is a URL, create an anchor tag for it.
+            displayValue = `<a href="${item.value}" target="_blank" rel="noopener noreferrer" class="terminal-link">${escapeHtml(item.value)}</a>`;
+        } else {
+            // For all other values, escape them to prevent any potential HTML injection.
+            displayValue = escapeHtml(String(item.value));
+        }
+        // --- END OF FIX ---
+
+        const line = `<span class="output-folder">${item.label}${padding}</span> : ${displayValue}`;
         print(line, 'info', true);
     });
 
@@ -2384,9 +2420,17 @@ function print(text, type = "info", allowHtml = false) {
     return; // Divert output to the buffer and stop here.
   }
 
-  if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
-    return; // If it doesn't match, simply don't print.
+  // if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
+  //   return; // If it doesn't match, simply don't print.
+  // }
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = allowHtml ? String(text) : escapeHtml(String(text));
+  if (activeGrepPattern && !activeGrepPattern.test(tempDiv.textContent || "")) {
+    return; // If it doesn't match the visible text, don't print.
   }
+
+
   // 1. Record this print action to our history log
   outputHistory.push({ text, type, allowHtml });
 
@@ -2400,8 +2444,43 @@ function print(text, type = "info", allowHtml = false) {
   if (allowHtml) {
     contentSpan.innerHTML = content;
   } else {
-    contentSpan.innerHTML = escapeHtml(content);
+    // If plain text, use the safe linkify method.
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let lastIndex = 0;
+    let match;
+
+    contentSpan.textContent = ''; // Clear span before appending nodes
+
+    while ((match = urlRegex.exec(content)) !== null) {
+      // Append the text before the link
+      if (match.index > lastIndex) {
+        contentSpan.appendChild(document.createTextNode(content.substring(lastIndex, match.index)));
+      }
+      
+      // Create and append the link element
+      const url = match[0];
+      let href = url;
+      if (href.startsWith('www.')) {
+        href = 'http://' + href;
+      }
+      
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.className = 'terminal-link';
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.appendChild(document.createTextNode(url)); // Use createTextNode for safety
+      contentSpan.appendChild(anchor);
+
+      lastIndex = urlRegex.lastIndex;
+    }
+
+    // Append any remaining text after the last link
+    if (lastIndex < content.length) {
+      contentSpan.appendChild(document.createTextNode(content.substring(lastIndex)));
+    }
   }
+
   lineDiv.appendChild(contentSpan);
   output.appendChild(lineDiv);
 
@@ -2409,7 +2488,6 @@ function print(text, type = "info", allowHtml = false) {
     const paddingSpan = document.createElement('span');
     paddingSpan.className = 'line-padding';
 
-    // ★★★ THE FIX: Use getVisualWidth to calculate padding correctly ★★★
     const visualWidth = getVisualWidth(contentSpan.textContent || "");
     const terminalWidthChars = Math.floor(output.clientWidth / CHARACTER_WIDTH);
     
@@ -2752,13 +2830,20 @@ function handleSudoCheck(originalCommandStr) {
 }
 
 async function executeLine(line) {
+
+    // Comments 
+    const originalLineToPrint = line;
+    line = line.split('#')[0].trim(); // Remove comments
+
     if (line.trim() === "") {
-        print(`${full_path} `);
+        print(`${full_path} ${originalLineToPrint}`); // Print the original line with comments
         print("");
+        done();
         return;
     }
     
-    print(`${full_path} ${line}`);
+    // print(`${full_path} ${line}`);
+    print(`${full_path} ${originalLineToPrint}`);
 
     const commandTokens = tokenizeLine(line);
     let lastCommandSuccess = true;

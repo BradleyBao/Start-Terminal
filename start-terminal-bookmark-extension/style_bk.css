@@ -13,7 +13,6 @@
   --highlight-color: #d9a1d2;
   --hint-color: #87baf0;
   --placeholder-color: #888a85;
-  --comment-color: #8c8c8c;
 
   /* Prompt specific colors */
   --prompt-user-color: #cccccc;
@@ -111,17 +110,6 @@ body.theme-cmd {
 .terminal {
   padding: 1rem;
   outline: none;
-}
-
-/* Style for auto-detected links in the terminal output */
-.terminal-link {
-    color: inherit;
-    text-decoration: none;  /* No underline by default */
-    cursor: pointer;
-}
-
-.terminal-link:hover {
-    text-decoration: underline; /* Add underline on mouse hover */
 }
 
 .typed-container {
