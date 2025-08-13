@@ -1225,7 +1225,44 @@ AVAILABLE THEMES
   default, ubuntu, powershell, cmd, kali, debian`
   },
 
-  // script.js
+  source: {
+    exec: async (args) => {
+      const targetFile = args[0] || '.startrc';
+
+      if (targetFile !== '.startrc') {
+        print(`source: only supports '.startrc' at the moment.`, 'error');
+        return;
+      }
+
+      print(`Reloading ${targetFile}...`, 'info');
+      const rcFile = await findFileInHome('.startrc');
+      if (!rcFile) {
+        print(`source: ${targetFile}: No such file or directory.`, 'error');
+        return;
+      }
+
+      // 清空旧的别名和环境变量，以便重新加载
+      aliases = {};
+      environmentVars = {};
+
+      try {
+        const scriptContent = decodeURIComponent(rcFile.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent);
+        print(`${targetFile} reloaded successfully.`, 'success');
+      } catch (e) {
+        print(`Error reading or applying ${targetFile}: ${e.message}`, 'error');
+      }
+    },
+    manual: `NAME
+  source - read and execute commands from a file
+
+SYNOPSIS
+  source <filename>
+
+DESCRIPTION
+  Reads and executes commands from <filename> in the current shell context.
+  Currently, only 'source .startrc' is supported.`
+  },
 
   config: {
     exec: async (args) => {
@@ -1250,7 +1287,7 @@ AVAILABLE THEMES
               const confirmImportBookmark = await userInputMode("Found legacy '.settings' folder. Import from it? [Y/n] ");
               print(`Found legacy '.settings' folder. Import from it? [Y/n] ${user_input_content}`);
 
-              if (user_input_content) {
+              if (confirmImportBookmark) {
                 const settingsToImport = {};
                 for (const key of CONFIG_KEYS) {
                   settingsToImport[key] = await readSettingFromBookmark(key);
@@ -1261,7 +1298,7 @@ AVAILABLE THEMES
                 
                 const confirmDelete = await userInputMode("Delete the old '.settings' folder? [Y/n] ");
                 print(`Delete the old '.settings' folder? [Y/n] ${user_input_content}`);
-                if (user_input_content) {
+                if (confirmDelete) {
                   await new Promise(resolve => chrome.bookmarks.removeTree(settingsFolder.id, resolve));
                   print("'.settings' folder removed.", "success");
                 }
@@ -1274,7 +1311,7 @@ AVAILABLE THEMES
               const confirmImportStorage = await userInputMode("Import settings from browser storage? [Y/n] ");
               print(`Import settings from browser storage? [Y/n] ${user_input_content}`);
 
-              if (user_input_content) {
+              if (confirmImportStorage) {
                 const data = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
                 const startrcContent = generateStartrcContent(data);
                 await createOrUpdateStartrcFile(startrcContent);
@@ -1287,15 +1324,75 @@ AVAILABLE THEMES
             if (!imported) {
                 const confirmCreateDefault = await userInputMode("Create a default .startrc file? [Y/n] ");
                 print(`Create a default .startrc file? [Y/n] ${user_input_content}`);
-                if (user_input_content) {
+                if (confirmCreateDefault) {
                   await createOrUpdateStartrcFile(); // 不传参数，使用默认值
                   print("Created default ~/.startrc file.", "success");
                 }
             }
             print("\nHint: You can now edit the config with: nano .startrc", "hint");
 
-          } else {
-             print(`Warning: '${mode}' mode is considered legacy. '.startrc' mode is recommended.`, 'warning');
+          } else if (mode === 'bookmark') {
+            // --- 最终修复版本: 完整的交互式 bookmark 设置流程 ---
+            print("Setting up bookmark configuration mode...", "highlight");
+
+            let settingsFolder = await getOrCreateSettingsFolder(false); // 先检查，不创建
+
+            if (settingsFolder) {
+              print("'.settings' folder already exists. Mode switched.", "success");
+            } else {
+              // 如果文件夹不存在，开始询问流程
+              const confirmCreation = await userInputMode("This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ");
+              print(`This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ${user_input_content}`);
+
+              if (!confirmCreation) {
+                print("Operation aborted by user.", "warning");
+                return; // 用户不同意，则完全中止
+              }
+              
+              // 用户同意后，创建文件夹
+              settingsFolder = await getOrCreateSettingsFolder(true);
+              if (!settingsFolder) {
+                print("Error: Could not create the ~/.settings folder.", "error");
+                return;
+              }
+              print("Created '.settings' folder.", "success");
+
+              // 然后询问是否从 storage 迁移
+              const confirmMigration = await userInputMode("Migrate existing settings from browser storage? (No=create defaults) [Y/n] ");
+              print(`Migrate existing settings from browser storage? (No=create defaults) [Y/n] ${user_input_content}`);
+
+              let settingsToWrite;
+              if (confirmMigration) {
+                print("Migrating settings from storage...", "info");
+                settingsToWrite = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+              } else {
+                print("Creating default settings...", "info");
+                settingsToWrite = {}; // 创建空对象，以便后面使用默认值
+              }
+
+              // 定义默认值，用于填充缺失的配置
+              const defaultSettings = {
+                aliases: {},
+                environmentVars: {},
+                theme: 'default',
+                cursorStyle: 'block',
+                settings: { default_mode: false, default_search_engine: "google" }
+              };
+              
+              // 循环所有必需的键，确保写入
+              const writePromises = [];
+              for (const key of CONFIG_KEYS) {
+                  const valueToWrite = settingsToWrite[key] ?? defaultSettings[key];
+                  if (valueToWrite !== undefined) {
+                      writePromises.push(writeSettingToBookmark(key, valueToWrite));
+                  }
+              }
+              await Promise.all(writePromises);
+              print("Configuration files created successfully.", "success");
+            }
+
+          } else if (mode === 'storage') {
+            print("Switching to browser storage mode.", "info");
           }
           configMode = mode;
           await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
