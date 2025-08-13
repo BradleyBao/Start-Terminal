@@ -1234,19 +1234,35 @@ AVAILABLE THEMES
         return;
       }
 
-      print(`Reloading ${targetFile}...`, 'info');
-      const rcFile = await findFileInHome('.startrc');
-      if (!rcFile) {
+      // 步骤 1: 使用内存中的快照找到文件的 ID
+      const rcFileInMemory = await findFileInHome('.startrc');
+      if (!rcFileInMemory) {
         print(`source: ${targetFile}: No such file or directory.`, 'error');
         return;
       }
 
-      // 清空旧的别名和环境变量，以便重新加载
-      aliases = {};
-      environmentVars = {};
+      print(`Reloading ${targetFile}...`, 'info');
 
+      // --- 关键修复：使用文件 ID 从 Chrome API 获取最新的书签数据 ---
+      const rcFileFresh = await new Promise(resolve => {
+        chrome.bookmarks.get(rcFileInMemory.id, (results) => {
+          resolve(results && results.length > 0 ? results[0] : null);
+        });
+      });
+
+      if (!rcFileFresh || !rcFileFresh.url) {
+        print(`source: Could not reload ${targetFile}. Bookmark may be invalid or deleted.`, 'error');
+        return;
+      }
+      // --- 修复结束 ---
+
+      // 步骤 2: 清空现有配置，准备接收新配置
+      Object.keys(aliases).forEach(key => delete aliases[key]);
+      Object.keys(environmentVars).forEach(key => delete environmentVars[key]);
+
+      // 步骤 3: 使用最新的文件内容进行解析和应用
       try {
-        const scriptContent = decodeURIComponent(rcFile.url.split('#')[1] || '');
+        const scriptContent = decodeURIComponent(rcFileFresh.url.split('#')[1] || '');
         await parseAndApplyStartrc(scriptContent);
         print(`${targetFile} reloaded successfully.`, 'success');
       } catch (e) {
@@ -3437,7 +3453,7 @@ welcome
 theme ubuntu
 
 # Set the cursor style. Supported: block, bar, underline
-cursor bar
+cursor block
 
 # Define command aliases. Use quotes for commands with spaces.
 alias ll='ls -l -a'
@@ -3578,6 +3594,17 @@ async function loadSettings() {
   const configData = await new Promise(resolve => chrome.storage.sync.get(['configMode', 'autosyncEnabled'], resolve));
   configMode = configData.configMode || 'storage'; // 默认为 'storage'
   autosyncEnabled = configData.autosyncEnabled || false;
+
+  if (configMode === 'storage' || configMode === 'bookmark') {
+    welcomeMsg();
+    setTimeout(() => { // 使用 setTimeout 确保提示信息在欢迎信息之后显示，更显眼
+      print("", "info"); // 添加一个空行以作分隔
+      print("[Notice] A new, more powerful configuration system '.startrc' is available.", "highlight");
+      print(`         You are currently using '${configMode}' mode.`, "info");
+      print("         Run 'config setup startrc' to switch to run control mode.", "hint");
+      print("", "info");
+    }, 100); // 延迟100毫秒显示
+  }
 
   // 3. 根据配置模式执行不同的加载逻辑
   if (configMode === 'startrc') {
