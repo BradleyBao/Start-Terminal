@@ -32,10 +32,13 @@ let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
 let configMode = "storage"; // Storage or Bookmarks, storage by default
 let autosyncEnabled = false; // Control if two backends should be synced
 const SETTINGS_FOLDER_NAME = '.settings';
-const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle'];
+const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle', 'syntaxHighlighting'];
 
 // Cursor style
 let cursorStyle = 'block'; // To track the current cursor style
+
+// Syntax 
+let syntaxHighlightingEnabled = false; // default is false
 
 let activeGrepPattern = null;
 
@@ -78,6 +81,7 @@ const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
 const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
 const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
 const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
+const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -458,7 +462,7 @@ function linkify(text) {
     return { html, linksFound };
 }
 
-function updateInputDisplay() {
+function updateInputDisplaySimple() {
   if (isComposing) {
     blockCursor.style.display = "none";
     return;
@@ -487,8 +491,16 @@ function updateInputDisplay() {
   }
 }
 
+function updateInputDisplay () {
+  if (syntaxHighlightingEnabled) {
+    updateInputDisplayWithHighlight();
+  } else {
+    updateInputDisplaySimple();
+  }
+}
+
 // Function to update the input display (typedText and blockCursor)
-function updateInputDisplayHighlight() {
+function updateInputDisplayWithHighlight() {
   if (isComposing) {
     blockCursor.style.display = "none";
     return;
@@ -921,6 +933,38 @@ SYNOPSIS
 DESCRIPTION
   Clears all previous output from the terminal screen.`
   },
+
+  syntax: {
+    exec: (args) => {
+      const mode = args[0];
+      if (mode === 'on') {
+        syntaxHighlightingEnabled = true;
+        setSetting('syntaxHighlighting', true);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting enabled.";
+      } else if (mode === 'off') {
+        syntaxHighlightingEnabled = false;
+        setSetting('syntaxHighlighting', false);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting disabled.";
+      } else {
+        return `Syntax highlighting is currently ${syntaxHighlightingEnabled ? 'ON' : 'OFF'}. Usage: syntax <on|off>`;
+      }
+    },
+    suggestions: (args) => {
+      if (args.length <= 1) return ['on', 'off'];
+      return [];
+    },
+    manual: `NAME
+  syntax - toggle real-time syntax highlighting
+
+SYNOPSIS
+  syntax [on|off]
+
+DESCRIPTION
+  Enables or disables syntax highlighting for the command input line and command history output.
+  Running 'syntax' without arguments displays the current status.`
+  },
   welcome: {
     exec: async () => {
       const manifest = chrome.runtime.getManifest();
@@ -929,6 +973,8 @@ DESCRIPTION
       print("");
       print("Type 'help' for a list of commands.");
       print("Type 'about' for more information about start-terminal.");
+      print("");
+      print(`What's new: ${UPDATE_LOG}`);
       print("");
       print("Default Search Engine:");
       print(`  - Current: ${default_search_engine}`, "highlight");
@@ -3063,7 +3109,15 @@ async function executeLine(line) {
     }
     
     // print(`${full_path} ${line}`);
-    print(`${full_path} ${originalLineToPrint}`);
+    // print(`${full_path} ${originalLineToPrint}`);
+
+    if (syntaxHighlightingEnabled) {
+        const promptHtml = escapeHtml(full_path) + ' ';
+        const commandHtml = highlightLineForOutput(originalLineToPrint);
+        print(promptHtml + commandHtml, 'info', true);
+    } else {
+        print(`${full_path} ${originalLineToPrint}`);
+    }
 
     const commandTokens = tokenizeLine(line);
     let lastCommandSuccess = true;
@@ -3432,7 +3486,46 @@ function generateStartrcContent(settings) {
   return content;
 }
 
-// script.js
+
+/**
+ * 为输出行生成高亮语法的HTML。
+ * @param {string} line - 要高亮的命令字符串。
+ * @returns {string} - 包含高亮标签的HTML字符串。
+ */
+function highlightLineForOutput(line) {
+    let html = '';
+    const commentIndex = line.indexOf('#');
+    let commandPart = line;
+    let commentPart = '';
+
+    if (commentIndex !== -1) {
+        commandPart = line.substring(0, commentIndex);
+        commentPart = line.substring(commentIndex);
+    }
+
+    const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+    let commandFound = false;
+
+    for (const token of tokens) {
+        const escapedToken = escapeHtml(token);
+        if (/^\s+$/.test(token)) {
+            html += escapedToken;
+        } else {
+            if (!commandFound) {
+                html += `<span class="cmd-highlight">${escapedToken}</span>`;
+                commandFound = true;
+            } else if (token.startsWith('-')) {
+                html += `<span class="comment-highlight">${escapedToken}</span>`;
+            } else {
+                html += escapedToken;
+            }
+        }
+    }
+    if (commentPart) {
+        html += `<span class="comment-highlight">${escapeHtml(commentPart)}</span>`;
+    }
+    return html;
+}
 
 /**
  * 创建或更新 ~/.startrc 文件。
@@ -3448,6 +3541,9 @@ async function createOrUpdateStartrcFile(content = null) {
 # Lines starting with # or // are comments.
 
 welcome
+
+# Enable Command Highlighting. Default: off
+# syntax off
 
 # Set the visual theme. Supported: default, ubuntu, powershell, cmd, kali, debian
 theme ubuntu
@@ -3500,6 +3596,15 @@ async function parseAndApplyStartrc(scriptContent) {
         await commands.welcome.exec(); // 调用 welcome 命令
         break;
 
+      case 'syntax':
+        const mode = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (mode === 'on') {
+          syntaxHighlightingEnabled = true;
+        } else if (mode === 'off') {
+          syntaxHighlightingEnabled = false;
+        }
+        break;
+
       case 'about':
         const options = {};
         const aboutArgs = [];
@@ -3531,7 +3636,6 @@ async function parseAndApplyStartrc(scriptContent) {
         }
         break;
 
-      // --- 修复2: 改进 alias 和 export 的解析逻辑 ---
       case 'alias':
       case 'export':
         const assignmentString = args.join(' ');
@@ -3563,6 +3667,11 @@ async function parseAndApplyStartrc(scriptContent) {
         break;
     }
   }
+
+  await setSetting('aliases', aliases);
+  await setSetting('environmentVars', environmentVars);
+  await setSetting('syntaxHighlighting', syntaxHighlightingEnabled);
+
 }
 
 /**
@@ -3700,6 +3809,7 @@ async function loadSettings() {
     applyBackground(null, promptOpacity); // Apply default background
   }
 
+  syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
 }
 
