@@ -1203,6 +1203,10 @@ DESCRIPTION
                 current = path[path.length - 1];
                 saveCurrentPath();
             }
+        } else if (targetPath === "~"){
+          current = homeDirNode;
+          path = [root, homeDirNode];
+          saveCurrentPath();
         } else {
             const result = findNodeByPath(targetPath);
             if (result && result.node && result.node.children) { // Ensure it's a directory
