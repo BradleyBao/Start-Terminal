@@ -171,22 +171,111 @@ body.theme-cmd {
 }
 
 /* This is the style for the character AT the cursor position (in-text cursor) */
+/* .highlighted-char {
+  background-color: var(--cursor-color);
+  display: inline-block; 
+  animation: pulse 1.2s steps(1, start) infinite;
+} */
+
 .highlighted-char {
-  background-color: var(--cursor-color); /* Green background, like the block cursor */
-  color: var(--background-color);       /* Black text */
-  /* animation: blink 1s steps(2, start) infinite; */
-  display: inline-block; /* Ensures background covers the char properly */
-  /* If you want it to look like a selection, revert to:
-  background-color: #ffffff; 
-  color: #000000; 
-  animation: none; 
-  */
+  /* 基础样式：白色背景 + 白色文字，实现覆盖效果 */
+  background-color: var(--cursor-color);
+  color: var(--background-color);
+  display: inline-block;
+  /* 动画负责从基础样式切换到普通样式 */
+  animation: pulse 1.2s steps(1, start) infinite;
 }
 
-/* --- Cursor Style Modifications --- */
+/* style.css */
+
+/* style.css */
+
+/* --- 最终修复：光标的静态与动画样式 --- */
+
+/* 1. 移动时的总开关：禁用动画 */
+.no-blink {
+    animation: none !important;
+}
+
+/* 2. 移动时行中字符的样式 (所有模式通用) */
+.highlighted-char.no-blink {
+    background-color: var(--cursor-color); /* 白底 */
+    color: var(--background-color);      /* 黑字 */
+}
+
+/* 3. 移动时 bar 和 underline 的线条需要被隐藏，因为被 block 样式取代 */
+/* .cursor-style-bar .highlighted-char.no-blink::after,
+.cursor-style-underline .highlighted-char.no-blink::after {
+    display: none;
+} */
+
+/* 4. 移动时行尾光标的样式 */
+/* Block 模式 (修复暴露 '_' 的问题) */
+.cursor.no-blink {
+    background-color: var(--cursor-color);
+    color: transparent;
+    visibility: visible;
+}
+/* Bar 和 Underline 模式 (确保线条可见) */
+.cursor-style-bar .cursor.no-blink::after,
+.cursor-style-underline .cursor.no-blink::after {
+    visibility: visible;
+}
+
+
+/* --- 光标的默认（闪烁）样式 --- */
 
 .cursor, .highlighted-char {
     position: relative;
+}
+
+/* Block 模式 (默认) */
+.highlighted-char {
+    background-color: var(--cursor-color);
+    color: var(--cursor-color);
+    display: inline-block;
+    /* animation: pulse 1.2s steps(1, start) infinite; */
+}
+
+/* Bar 模式 */
+.cursor-style-bar .highlighted-char {
+    background-color: transparent;
+    /* color: var(--foreground-color); */
+    color: inherit;
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
+    animation: none;
+}
+.cursor-style-bar .highlighted-char::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px;
+    width: 2px;
+    background-color: var(--cursor-color);
+}
+
+
+/* Underline 模式 */
+.cursor-style-underline .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color);
+    animation: none;
+}
+.cursor-style-underline .highlighted-char::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
+    /* animation: blink-bar 1.2s steps(1, start) infinite; */
+}
+
+.cursor, .highlighted-char {
+    position: relative;
+    
 }
 
 /* --- Bar Style ('|') --- */
@@ -202,7 +291,7 @@ body.theme-cmd {
     left: -1px; /* Position it precisely at the start */
     width: 2px;
     background-color: var(--cursor-color);
-    /* The main .cursor already has the blink animation, which is inherited */
+    animation: none;
 }
 
 .cursor-style-bar .highlighted-char {
@@ -219,11 +308,11 @@ body.theme-cmd {
     background-color: var(--cursor-color);
 }
 
-
 /* --- Underline Style ('_') --- */
 .cursor-style-underline .cursor {
     color: transparent; /* Hide the original '_' text */
     background-color: transparent;
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
 }
 .cursor-style-underline .cursor::after {
     content: '';
@@ -233,11 +322,13 @@ body.theme-cmd {
     bottom: 0;
     height: 3px;
     background-color: var(--cursor-color);
+    
 }
 
 .cursor-style-underline .highlighted-char {
     background-color: transparent;
     color: var(--foreground-color);
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
 }
 .cursor-style-underline .highlighted-char::after {
     content: '';
@@ -327,7 +418,7 @@ body.theme-cmd {
   width: 1ch; /* or use font-metric based width if possible */
   line-height: 1.1;
   background-color: var(--cursor-color);
-  animation: blink 1s steps(2, start) infinite;
+  animation: blink 1.2s steps(2, start) infinite;
 
   /* background-color: rgb(255, 255, 255); */
   /* animation: blink 1s steps(2, start) infinite; */
@@ -344,6 +435,35 @@ body.theme-cmd {
     background-color: transparent; */
     /* display: none; */
     visibility: hidden;
+  }
+}
+
+@keyframes blink-bar {
+  to {
+    background-color: transparent;
+    color: var(--foreground-color); /* 恢复为普通文字颜色 */
+  }
+}
+
+@keyframes pulse {
+  0% {
+    color: var(--background-color);
+    background-color: var(--cursor-color);
+  }
+  50% {
+    color: inherit;
+    background-color: transparent;
+  }
+  100% {
+    color: var(--background-color);
+    background-color: var(--cursor-color);
+  }
+}
+
+@keyframes blink-invert {
+  to {
+    background-color: transparent;
+    color: var(--foreground-color); /* 恢复为普通文字颜色 */
   }
 }
 

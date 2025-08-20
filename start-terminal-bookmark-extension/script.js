@@ -14,6 +14,10 @@ const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
+// cursor 
+let isBlinkingPaused = false;
+let blinkTimeout = 1000
+
 let control_cmd = false;
 let commanding = false;
 let input_mode = false;
@@ -500,6 +504,90 @@ function updateInputDisplay () {
 }
 
 // Function to update the input display (typedText and blockCursor)
+// function updateInputDisplayWithHighlight() {
+//   if (isComposing) {
+//     blockCursor.style.display = "none";
+//     return;
+//   }
+
+//   let html = '';
+//   let bufferIndex = 0;
+
+//   // 内部辅助函数，用于处理一小块文本，并正确插入光标下的高亮字符
+//   const processChunk = (text, className = '') => {
+//     let chunkHtml = '';
+//     for (const char of text) {
+//       if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
+//         // 如果当前字符索引等于光标位置，则用高亮span包裹
+//         chunkHtml += `<span class="highlighted-char">${escapeHtml(char)}</span>`;
+//       } else {
+//         chunkHtml += escapeHtml(char);
+//       }
+//       bufferIndex++;
+//     }
+//     // 如果有CSS类名，用相应的span包裹整个块
+//     if (className) {
+//       return `<span class="${className}">${chunkHtml}</span>`;
+//     }
+//     return chunkHtml;
+//   };
+
+//   // 1. 首先处理注释：#号及其之后的所有内容
+//   const commentIndex = buffer.indexOf('#');
+//   let commandPart = buffer;
+//   let commentPart = '';
+
+//   if (commentIndex !== -1) {
+//     commandPart = buffer.substring(0, commentIndex);
+//     commentPart = buffer.substring(commentIndex);
+//   }
+
+//   // 2. 将命令部分分解成令牌（单词和空格）并处理
+//   const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+//   let commandFound = false;
+
+//   for (const token of tokens) {
+//     if (/^\s+$/.test(token)) { // 如果是空格
+//       html += processChunk(token);
+//     } else { // 如果是单词
+//       if (!commandFound) {
+//         // 第一个单词是命令
+//         html += processChunk(token, 'cmd-highlight');
+//         commandFound = true;
+//       } else if (token.startsWith('-')) {
+//         // 以'-'开头的是选项
+//         html += processChunk(token, 'comment-highlight');
+//       } else {
+//         // 其他都是参数
+//         html += processChunk(token);
+//       }
+//     }
+//   }
+
+//   // 3. 处理注释部分
+//   if (commentPart) {
+//     html += processChunk(commentPart, 'comment-highlight');
+//   }
+
+//   // 4. 更新DOM
+//   typedText.innerHTML = html;
+
+//   // 5. 控制行尾闪烁光标的显示
+//   if (cursorPosition === buffer.length) {
+//     blockCursor.style.display = "inline-block";
+//   } else {
+//     blockCursor.style.display = "none";
+//   }
+
+//   // 6. 恢复浏览器内部的光标位置以保证输入法（IME）的正常工作
+//   const currentActiveElement = document.activeElement;
+//   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+//   if (typedTextIsFocused || currentActiveElement === document.body) {
+//     setCaretAtOffset(typedText, cursorPosition);
+//   }
+// }
+
+// script.js
 function updateInputDisplayWithHighlight() {
   if (isComposing) {
     blockCursor.style.display = "none";
@@ -509,26 +597,27 @@ function updateInputDisplayWithHighlight() {
   let html = '';
   let bufferIndex = 0;
 
-  // 内部辅助函数，用于处理一小块文本，并正确插入光标下的高亮字符
   const processChunk = (text, className = '') => {
     let chunkHtml = '';
     for (const char of text) {
       if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
-        // 如果当前字符索引等于光标位置，则用高亮span包裹
-        chunkHtml += `<span class="highlighted-char">${escapeHtml(char)}</span>`;
+        // --- JS 关键修复：根据状态动态添加 no-blink 类 ---
+        let highlightClasses = 'highlighted-char';
+        if (isBlinkingPaused) {
+          highlightClasses += ' no-blink';
+        }
+        chunkHtml += `<span class="${highlightClasses}">${escapeHtml(char)}</span>`;
       } else {
         chunkHtml += escapeHtml(char);
       }
       bufferIndex++;
     }
-    // 如果有CSS类名，用相应的span包裹整个块
     if (className) {
       return `<span class="${className}">${chunkHtml}</span>`;
     }
     return chunkHtml;
   };
 
-  // 1. 首先处理注释：#号及其之后的所有内容
   const commentIndex = buffer.indexOf('#');
   let commandPart = buffer;
   let commentPart = '';
@@ -538,44 +627,36 @@ function updateInputDisplayWithHighlight() {
     commentPart = buffer.substring(commentIndex);
   }
 
-  // 2. 将命令部分分解成令牌（单词和空格）并处理
   const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
   let commandFound = false;
 
   for (const token of tokens) {
-    if (/^\s+$/.test(token)) { // 如果是空格
+    if (/^\s+$/.test(token)) {
       html += processChunk(token);
-    } else { // 如果是单词
+    } else {
       if (!commandFound) {
-        // 第一个单词是命令
         html += processChunk(token, 'cmd-highlight');
         commandFound = true;
       } else if (token.startsWith('-')) {
-        // 以'-'开头的是选项
         html += processChunk(token, 'comment-highlight');
       } else {
-        // 其他都是参数
         html += processChunk(token);
       }
     }
   }
 
-  // 3. 处理注释部分
   if (commentPart) {
     html += processChunk(commentPart, 'comment-highlight');
   }
 
-  // 4. 更新DOM
   typedText.innerHTML = html;
 
-  // 5. 控制行尾闪烁光标的显示
   if (cursorPosition === buffer.length) {
     blockCursor.style.display = "inline-block";
   } else {
     blockCursor.style.display = "none";
   }
 
-  // 6. 恢复浏览器内部的光标位置以保证输入法（IME）的正常工作
   const currentActiveElement = document.activeElement;
   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
   if (typedTextIsFocused || currentActiveElement === document.body) {
@@ -1017,24 +1098,40 @@ SYNOPSIS
   },
   ls: {
     exec: (args, options, pipedInput) => {
-        // 1. Get ALL real items from the current directory first.
-        let allItems = (current.children || []).map(child => ({
+        let targetNode;
+        const pathArg = args.join(' ');
+
+        // --- 1. 新增：解析路径参数 ---
+        if (pathArg) {
+            const result = findNodeByPath(pathArg);
+            if (!result || !result.node) {
+                return `ls: cannot access '${pathArg}': No such file or directory`;
+            }
+            // 如果路径指向一个文件而不是文件夹，则直接打印文件名
+            if (!result.node.children) {
+                return result.node.title;
+            }
+            targetNode = result.node;
+        } else {
+            // 如果没有路径参数，则使用当前目录
+            targetNode = current;
+        }
+        // --- 路径解析结束 ---
+
+        // 2. 后续逻辑使用 targetNode 而不是 current
+        let allItems = (targetNode.children || []).map(child => ({
             title: child.title,
             node: child,
             className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
         }));
 
-        // ★★★ NEW LOGIC: Filter items based on the '-a' option ★★★
-        // If '-a' is NOT present, filter out items that start with '.'
         const itemsToDisplay = options.a 
             ? allItems 
             : allItems.filter(item => !item.title.startsWith('.'));
         
-        // 3. Sort the filtered items alphabetically.
         itemsToDisplay.sort((a, b) => a.title.localeCompare(b.title));
 
-        // 4. Proceed with the display logic using the correctly filtered list.
-        if (options.l) { // Handle -l (long format)
+        if (options.l) {
             if (itemsToDisplay.length === 0) return [];
             return itemsToDisplay.map(item => {
                 const owner = user || 'root';
@@ -1048,7 +1145,6 @@ SYNOPSIS
             });
         }
 
-        // Standard multi-column layout
         if (itemsToDisplay.length === 0) return [];
         
         const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
@@ -1080,7 +1176,18 @@ SYNOPSIS
         }
         return outputLines;
     },
-    manual: "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l] [-a]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.\n  -a\tdo not ignore entries starting with ."
+    manual: `NAME
+  ls - list directory contents
+
+SYNOPSIS
+  ls [-la] [path]
+
+DESCRIPTION
+  List information about the bookmarks and folders in the specified [path].
+  If no path is given, the contents of the current directory are listed.
+
+  -l    use a long listing format.
+  -a    do not ignore entries starting with .`
   },
   cd: {
     exec: (args) => {
@@ -2097,76 +2204,90 @@ DESCRIPTION
   },
 
 
-  help: () => {
-    print("");
-    print("--- Terminal Help ---", "highlight");
-    print("");
+  // script.js (in the commands object)
 
-    print("Search Commands", "highlight");
-    print("  google, bing, baidu, yt, ...  - Search on a specific engine.");
-    print("  default <engine|on|off>       - Manage the default search behavior.");
-    print("");
-    
-    print("Navigation & Bookmarks", "highlight");
-    print("  ls [-la]                      - List bookmarks in the current directory.");
-    print("  cd <folder>                   - Change directory.");
-    print("  pwd                           - Show current bookmark path.");
-    print("  goto <url> [-b]               - Navigate to a specific URL.");
-    print("  tree                          - Display the directory tree structure.");
-    print("  ./<bookmark_name>             - Open a bookmark in the current directory.");
-    print("");
+  help: {
+    exec: () => {
+        print("");
+        print("--- Terminal Help ---", "highlight");
+        print("");
 
-    print("File & Directory Operations", "highlight");
-    print("  mkdir <folder>                - Create a new bookmark folder.");
-    print("  touch <file>                  - Create a new, empty bookmark.");
-    print("  mv <src> <dest>               - Move or rename a bookmark/folder.");
-    print("  cp [-r] <src> <dest>          - Copy a bookmark or folder.");
-    print("  rm [-r] <name>                - Remove a bookmark or folder.");
-    print("  rmdir <folder>                - Remove an empty bookmark folder.");
-    print("  find <path> -name <pattern>   - Find bookmarks/folders by name.");
-    print("  cat <bookmark>                - Display details of a bookmark.");
-    print("");
-    
-    print("Editors", "highlight");
-    print("  nano <file>                   - Edit a bookmark or setting file with a simple editor.");
-    print("  vim <file>                    - Edit a bookmark's raw data with a Vim-like editor.");
-    print("");
+        print("Search Commands", "highlight");
+        print("  google, bing, baidu, youtube, ... - Search on a specific engine.");
+        print("  default <engine|on|off>         - Manage the default search behavior.");
+        print("");
+        
+        print("Navigation & Bookmarks", "highlight");
+        print("  ls [-la]                        - List bookmarks in the current directory.");
+        print("  cd <folder>                     - Change directory.");
+        print("  pwd                             - Show current bookmark path.");
+        print("  goto <url> [-b]                 - Navigate to a specific URL.");
+        print("  tree                            - Display the directory tree structure.");
+        print("  ./<bookmark_name>               - Open a bookmark in the current directory.");
+        print("");
 
-    print("Browser & System Control", "highlight");
-    print("  tabs <ls|close|switch>        - Manage browser tabs.");
-    print("  downloads <ls>                - List recent downloads.");
-    print("  wget <url>                    - Download a file from a URL.");
-    print("  ping <host>                   - Ping a host.");
-    print("  date                          - Show current date and time.");
-    print("  clear (or cls)                - Clear the terminal screen.");
-    print("");
+        print("File & Directory Operations", "highlight");
+        print("  mkdir <folder>                  - Create a new bookmark folder.");
+        print("  touch <file>                    - Create a new, empty bookmark.");
+        print("  mv <src> <dest>                 - Move or rename a bookmark/folder.");
+        print("  cp [-r] <src> <dest>            - Copy a bookmark or folder.");
+        print("  rm [-r] <name>                  - Remove a bookmark or folder.");
+        print("  rmdir <folder>                  - Remove an empty bookmark folder.");
+        print("  find <path> -name <pattern>     - Find bookmarks/folders by name.");
+        print("  cat <bookmark>                  - Display details of a bookmark.");
+        print("");
+        
+        print("Editors", "highlight");
+        print("  nano <file>                     - Edit a bookmark or config file with a simple editor.");
+        print("  vim <file>                      - Edit a bookmark's raw data with a Vim-like editor.");
+        print("");
 
-    print("Shell, Environment & History", "highlight");
+        print("Browser & System Control", "highlight");
+        print("  tabs <ls|close|switch>          - Manage browser tabs.");
+        print("  downloads <ls>                  - List recent downloads.");
+        print("  wget <url>                      - Download a file from a URL.");
+        print("  ping <host>                     - Ping a host.");
+        print("  date                            - Show current date and time.");
+        print("  clear (or cls)                  - Clear the terminal screen.");
+        print("");
 
-    print("  export VAR=value              - Set an environment variable.");
-    print("  unset <VAR_NAME>              - Unset an environment variable.");
-    print("  env                           - Display environment variables.");
-    print("  grep <pattern>                - Filter piped input.");
-    print("  history                       - Show command history.");
-    print("  alias [name='cmd']            - Create or list command aliases.");
-    print("  unalias <name>                - Remove an alias.");
-    print("");
-    
-    print("Account, Customization & Meta", "highlight");
-    print("  mslogin / mslogout            - Log in/out with a Microsoft account.");
-    print("  theme <name>                  - Change terminal theme.");
-    print("  cursor <style>                - Change cursor style (block, bar, underline).");
-    print("  uploadbg / setbg              - Manage custom background.");
-    print("  setbgAPI <url>                - Set the random background image API URL.");
-    print("  config <setup|sync|...>       - Manage how and where settings are stored.");
-    print("  apt <update|upgrade>          - Check for or apply extension updates.");
-    print("  about [-V]                    - Show details about this extension.");
-    print("  feedback                      - Provide feedback or rate the extension.");
-    print("  man <command>                 - Show the manual page for a command.");
-    print("");
+        print("Shell, Environment & History", "highlight");
+        print("  source <file>                   - Reload and execute a configuration file (e.g., .startrc).");
+        print("  export VAR=value                - Set an environment variable.");
+        print("  unset <VAR_NAME>                - Unset an environment variable.");
+        print("  env                             - Display environment variables.");
+        print("  grep <pattern>                  - Filter piped input.");
+        print("  history                         - Show command history.");
+        print("  alias [name='cmd']              - Create or list command aliases.");
+        print("  unalias <name>                  - Remove an alias.");
+        print("");
+        
+        print("Account, Customization & Meta", "highlight");
+        print("  welcome                         - Display the startup welcome message.");
+        print("  syntax [on|off]                 - Toggle command syntax highlighting.");
+        print("  mslogin / mslogout              - Log in/out with a Microsoft account.");
+        print("  theme <name>                    - Change terminal theme.");
+        print("  cursor <style>                  - Change cursor style (block, bar, underline).");
+        print("  uploadbg / setbg                - Manage custom background.");
+        print("  setbgAPI <url>                  - Set the random background image API URL.");
+        print("  config <setup|...>              - Manage how settings are stored (e.g., '.startrc' mode).");
+        print("  apt <update|upgrade>            - Check for or apply extension updates.");
+        print("  about [-V]                      - Show details about this extension.");
+        print("  feedback                        - Provide feedback or rate the extension.");
+        print("  man <command>                   - Show the manual page for a command.");
+        print("");
 
-    print("For more details on a command, type: man <command_name>", "hint");
-    return ""; 
+        print("For more details on a command, type: man <command_name>", "hint");
+        return ""; 
+    },
+    manual: `NAME
+  help - display information about built-in commands
+
+SYNOPSIS
+  help
+
+DESCRIPTION
+  Displays a summary of all available commands, grouped by category.`
   },
   about: {
     exec: async (args, options) => {
@@ -2224,7 +2345,8 @@ DESCRIPTION
 
     return ""; // Return nothing to avoid an extra blank line from the engine
   },
-  feedback: async () => {
+},
+feedback: async () => {
     print("How can we help?", "highlight");
     print("");
     print("[1] Rate The Extension");
@@ -2253,7 +2375,6 @@ DESCRIPTION
     }
     return;
 },
-}
 };
 
 /**
@@ -3572,6 +3693,20 @@ echo ".startrc loaded successfully."
   await new Promise(resolve => chrome.bookmarks.create({ parentId: homeDirNode.id, title: '.startrc', url: dataUrl }, resolve));
 }
 
+// script.js
+function pauseBlinking() {
+  isBlinkingPaused = true;
+  blockCursor.classList.add('no-blink');
+  updateInputDisplay(); // 强制重绘以应用静态样式
+
+  clearTimeout(blinkTimeout);
+  blinkTimeout = setTimeout(() => {
+    isBlinkingPaused = false;
+    blockCursor.classList.remove('no-blink');
+    updateInputDisplay(); // 强制重绘以恢复动画
+  }, 1000);
+}
+
 /**
  * 解析并应用 .startrc 文件的配置。 (修复后版本)
  * @param {string} scriptContent - 从 .startrc 文件读取的配置内容。
@@ -3829,7 +3964,7 @@ function typingIO_cursor() {
   // after 2 seconds, re-enable blinking
   setTimeout(() => {
     blockCursor.classList.remove('no-blink');
-  }, 100);
+  }, 1000);
 }
 
 // in script.js, can be placed near other helper functions
@@ -4026,6 +4161,7 @@ document.body.addEventListener("keydown", async e => {
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking();
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -4037,6 +4173,7 @@ document.body.addEventListener("keydown", async e => {
     clearSuggestions(); 
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -4065,11 +4202,13 @@ document.body.addEventListener("keydown", async e => {
           case 'a': // Move to beginning of line
               e.preventDefault();
               cursorPosition = 0;
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'e': // Move to end of line
               e.preventDefault();
               cursorPosition = buffer.length;
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'u': // Delete from cursor to start of line
@@ -4078,6 +4217,7 @@ document.body.addEventListener("keydown", async e => {
                   yankBuffer = buffer.substring(0, cursorPosition);
                   buffer = buffer.substring(cursorPosition);
                   cursorPosition = 0;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -4085,6 +4225,7 @@ document.body.addEventListener("keydown", async e => {
               e.preventDefault();
               yankBuffer = buffer.substring(cursorPosition);
               buffer = buffer.substring(0, cursorPosition);
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'w': // Delete word before cursor
@@ -4147,6 +4288,7 @@ document.body.addEventListener("keydown", async e => {
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
                   cursorPosition = prevWordPos;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -4157,6 +4299,7 @@ document.body.addEventListener("keydown", async e => {
                   while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
                   while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
                   cursorPosition = nextWordPos;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -4192,6 +4335,7 @@ document.body.addEventListener("keydown", async e => {
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
     return;
@@ -4201,6 +4345,7 @@ document.body.addEventListener("keydown", async e => {
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
     return;
@@ -4364,6 +4509,7 @@ if (e.key === "Tab") {
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -4386,6 +4532,7 @@ if (e.key === "Tab") {
   } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking(); // Pause blinking when typing
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -4649,6 +4796,14 @@ function redrawAllLinesOnResize() {
 window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
 window.onload = async () => {
+
+  terminal.addEventListener('dragstart', (e) => {
+    // 1. 阻止浏览器默认的拖拽行为
+    e.preventDefault();
+    // 2. 立刻清空当前的文字选择
+    // window.getSelection().removeAllRanges();
+  });
+
   // No explicit body focus, let browser decide or user click.
   // typedText.focus() will be called by done() or click handler.
   updateCharacterWidth(); // Initial calculation
