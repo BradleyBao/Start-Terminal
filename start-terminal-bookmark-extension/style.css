@@ -395,7 +395,8 @@ body.theme-tango-dark {
   outline: none;
   user-select: none;
   caret-color: transparent;
-  color: var(--prompt-color);
+  /* color: var(--prompt-color); */
+  color: var(--foreground-color);
 
   line-height: 1.1;
 }
