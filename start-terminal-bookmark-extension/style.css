@@ -2,7 +2,8 @@
   --background-color: #0c0c0c;
   --foreground-color: #f6f6f6;
   --prompt-color: #f6f6f6;
-  --cursor-color: #f6f6f6;
+  /* --cursor-color: #f6f6f6; */
+  --cursor-color: var(--foreground-color);
   --selection-background: #f6f6f6;
   --selection-foreground: #0c0c0c;
   --folder-color: #4b92ef;
@@ -14,6 +15,7 @@
   --hint-color: #87baf0;
   --placeholder-color: #888a85;
   --comment-color: #8c8c8c;
+  --overlay-color: #000000;
 
   /* Prompt specific colors */
   --prompt-user-color: #cccccc;
@@ -26,9 +28,23 @@
   --terminal-font: 'Consolas', 'Menlo', 'Courier New', monospace;
 }
 
+.prompt-user, .prompt-host {
+    color: var(--prompt-user-color);
+}
+.prompt-path {
+    color: var(--prompt-path-color);
+}
+.prompt-char {
+    color: var(--prompt-char-color);
+}
+.prompt-extra {
+    color: var(--prompt-extra-color);
+}
+
 body {
   margin: 0;
-  background-color: #000;
+  /* background-color: #000; */
+  background-color: var(--overlay-color);
   color: rgb(255, 255, 255);
   /* font-family: monospace; */
   font-family: var(--terminal-font); 
@@ -47,7 +63,15 @@ body {
   background-size: cover;
   background-position: center;
   transition: opacity 0.5s ease-in-out;
+  
   opacity: 0.15; /* Default transparent background */
+}
+
+body.dark-mode {
+  --overlay-color: #000000;
+}
+body.light-mode {
+  --overlay-color: #ffffff;
 }
 
 body.theme-ubuntu {
@@ -107,6 +131,235 @@ body.theme-cmd {
   --prompt-char-color: #c0c0c0;
   --terminal-font: 'Consolas', 'Courier New', monospace;
 }
+
+/* style.css */
+
+/* --- 10 New Themes --- */
+
+/* DOS Theme */
+body.theme-dos {
+  --background-color: #000080;
+  --foreground-color: #ffffff;
+  --folder-color: #ffff00;
+  --exec-color: #00ff00;
+  --prompt-char-color: #ffffff;
+  --prompt-path-color: #ffffff;
+  --terminal-font: 'Perfect DOS VGA 437', 'Courier New', monospace; /* Fallback to Courier New */
+}
+
+/* Solarized Dark Theme */
+body.theme-solarized-dark {
+  --background-color: #002b36;
+  --foreground-color: #839496;
+  --folder-color: #268bd2;
+  --exec-color: #859900;
+  --error-color: #dc322f;
+  --warning-color: #b58900;
+  --highlight-color: #6c71c4;
+}
+
+/* Solarized Light Theme */
+body.theme-solarized-light {
+  --background-color: #fdf6e3;
+  --foreground-color: #657b83;
+  --folder-color: #268bd2;
+  --exec-color: #859900;
+  --error-color: #dc322f;
+  --warning-color: #b58900;
+  --highlight-color: #6c71c4;
+}
+
+/* Monokai Theme */
+body.theme-monokai {
+  --background-color: #272822;
+  --foreground-color: #f8f8f2;
+  --folder-color: #a6e22e; /* Green */
+  --exec-color: #a6e22e;
+  --error-color: #f92672;  /* Pink */
+  --warning-color: #e6db74; /* Yellow */
+  --highlight-color: #66d9ef; /* Cyan */
+}
+
+/* Dracula Theme */
+body.theme-dracula {
+  --background-color: #282a36;
+  --foreground-color: #f8f8f2;
+  --folder-color: #bd93f9; /* Purple */
+  --exec-color: #50fa7b;   /* Green */
+  --error-color: #ff5555;  /* Red */
+  --warning-color: #f1fa8c; /* Yellow */
+  --highlight-color: #ff79c6; /* Pink */
+}
+
+/* Gruvbox Dark Theme */
+body.theme-gruvbox-dark {
+  --background-color: #282828;
+  --foreground-color: #ebdbb2;
+  --folder-color: #83a598;
+  --exec-color: #b8bb26;
+  --error-color: #fb4934;
+  --warning-color: #fabd2f;
+  --highlight-color: #d3869b;
+}
+
+/* Nord Theme */
+body.theme-nord {
+  --background-color: #2e3440;
+  --foreground-color: #d8dee9;
+  --folder-color: #88c0d0;
+  --exec-color: #a3be8c;
+  --error-color: #bf616a;
+  --warning-color: #ebcb8b;
+  --highlight-color: #b48ead;
+}
+
+/* Matrix Theme */
+body.theme-matrix {
+  --background-color: #000000;
+  --foreground-color: #00ff00;
+  --folder-color: #33ff33;
+  --exec-color: #aaffaa;
+  --prompt-path-color: #00ff00;
+  --prompt-char-color: #00ff00;
+  --terminal-font: 'Hack', 'Ubuntu Mono', monospace;
+}
+
+/* One Dark Theme */
+body.theme-one-dark {
+  --background-color: #282c34;
+  --foreground-color: #abb2bf;
+  --folder-color: #61afef; /* Blue */
+  --exec-color: #98c379;   /* Green */
+  --error-color: #e06c75;  /* Red */
+  --warning-color: #e5c07b; /* Yellow */
+  --highlight-color: #c678dd; /* Magenta */
+}
+
+/* Red Sands Theme */
+body.theme-red-sands {
+  --background-color: #4c1c1c;
+  --foreground-color: #f2e5d5;
+  --folder-color: #e89b52;
+  --exec-color: #d1b475;
+  --error-color: #e86a52;
+  --warning-color: #e8c952;
+  --highlight-color: #d18275;
+}
+
+/* GitHub Dark Theme */
+body.theme-github-dark {
+  --background-color: #0d1117;
+  --foreground-color: #c9d1d9;
+  --folder-color: #58a6ff;
+  --exec-color: #56d364;
+  --error-color: #f85149;
+  --warning-color: #d29922;
+  --highlight-color: #a5d6ff;
+  --terminal-font: 'Cascadia Code', 'Hack', 'Ubuntu Mono', monospace;
+}
+
+/* GitHub Light Theme */
+body.theme-github-light {
+  --background-color: #ffffff;
+  --foreground-color: #24292f;
+  --folder-color: #0969da;
+  --exec-color: #1a7431;
+  --error-color: #cf222e;
+  --warning-color: #9a6700;
+  --highlight-color: #8250df;
+  --terminal-font: 'Cascadia Code', 'Hack', 'Ubuntu Mono', monospace;
+}
+
+/* Material Dark Theme */
+body.theme-material-dark {
+  --background-color: #263238;
+  --foreground-color: #eeffff;
+  --folder-color: #82aaff;
+  --exec-color: #c3e88d;
+  --error-color: #ff5370;
+  --warning-color: #ffcb6b;
+  --highlight-color: #c792ea;
+}
+
+/* Material Light Theme */
+body.theme-material-light {
+  --background-color: #fafafa;
+  --foreground-color: #37474f;
+  --folder-color: #40c4ff;
+  --exec-color: #91b859;
+  --error-color: #e53935;
+  --warning-color: #ffb62c;
+  --highlight-color: #ab47bc;
+}
+
+/* Ayu Dark Theme */
+body.theme-ayu-dark {
+  --background-color: #0a0e14;
+  --foreground-color: #b3b1b1;
+  --folder-color: #39bae6;
+  --exec-color: #b3b1b1;
+  --error-color: #ff3333;
+  --warning-color: #e6b450;
+  --highlight-color: #e6b450;
+}
+
+/* Ayu Light Theme */
+body.theme-ayu-light {
+  --background-color: #fafafa;
+  --foreground-color: #5c6773;
+  --folder-color: #55b4d4;
+  --exec-color: #478c5b;
+  --error-color: #f07178;
+  --warning-color: #f29718;
+  --highlight-color: #a37acc;
+}
+
+/* Cyberpunk / Outrun Theme */
+body.theme-cyberpunk {
+  --background-color: #1d122e;
+  --foreground-color: #f4f3f5;
+  --folder-color: #fc7989;   /* Pink */
+  --exec-color: #ddfdf9;     /* Off-white */
+  --error-color: #fc7989;    /* Pink */
+  --warning-color: #e5f779;  /* Yellow */
+  --highlight-color: #9a58f7; /* Purple */
+  --hint-color: #00f5d4;      /* Cyan */
+}
+
+/* Amber CRT Theme */
+body.theme-amber-crt {
+  --background-color: #1c1c1c;
+  --foreground-color: #ffb000; /* Amber */
+  --folder-color: #ffd050;
+  --exec-color: #ffc030;
+  --prompt-char-color: #ffb000;
+  --prompt-path-color: #ffb000;
+  --terminal-font: 'Ubuntu Mono', 'Courier New', monospace;
+}
+
+/* Ocean Theme */
+body.theme-ocean {
+  --background-color: #0e2f44;
+  --foreground-color: #b5d2e7;
+  --folder-color: #68a4cc;
+  --exec-color: #8ab362;
+  --error-color: #e4717a;
+  --warning-color: #d9b875;
+  --highlight-color: #a381ff;
+}
+
+/* Tango Dark Theme */
+body.theme-tango-dark {
+  --background-color: #2e3436;
+  --foreground-color: #eeeeec;
+  --folder-color: #729fcf;
+  --exec-color: #8ae234;
+  --error-color: #ef2929;
+  --warning-color: #fce94f;
+  --highlight-color: #ad7fa8;
+  --terminal-font: 'Ubuntu Mono', monospace;
+}
+
 
 .terminal {
   padding: 1rem;

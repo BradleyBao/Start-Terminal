@@ -36,10 +36,29 @@ let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
 let configMode = "storage"; // Storage or Bookmarks, storage by default
 let autosyncEnabled = false; // Control if two backends should be synced
 const SETTINGS_FOLDER_NAME = '.settings';
-const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle', 'syntaxHighlighting'];
+const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle', 'syntaxHighlighting', 'backgroundMode', 'backgroundModeAuto'];
 
 // Cursor style
 let cursorStyle = 'block'; // To track the current cursor style
+
+const SUPPORTED_THEMES = [
+    'default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian',
+    'dos', 'solarized-dark', 'solarized-light', 'monokai', 'dracula',
+    'gruvbox-dark', 'nord', 'matrix', 'one-dark', 'red-sands',
+    'github-dark', 'github-light', 'material-dark', 'material-light',
+    'ayu-dark', 'ayu-light', 'cyberpunk', 'amber-crt', 'ocean', 'tango-dark'
+];
+
+let backgroundMode = 'dark';
+let backgroundModeAuto = true;
+
+const THEME_MODES = {
+  'default': 'dark', 'ubuntu': 'dark', 'powershell': 'dark', 'cmd': 'dark', 'kali': 'dark', 'debian': 'dark',
+  'dos': 'dark', 'solarized-dark': 'dark', 'monokai': 'dark', 'dracula': 'dark',
+  'gruvbox-dark': 'dark', 'nord': 'dark', 'matrix': 'dark', 'one-dark': 'dark', 'red-sands': 'dark',
+  'github-dark': 'dark', 'material-dark': 'dark', 'ayu-dark': 'dark', 'cyberpunk': 'dark', 'amber-crt': 'dark', 'ocean': 'dark', 'tango-dark': 'dark',
+  'solarized-light': 'light', 'github-light': 'light', 'material-light': 'light', 'ayu-light': 'light'
+};
 
 // Syntax 
 let syntaxHighlightingEnabled = false; // default is false
@@ -115,37 +134,61 @@ function get_fav(bookmarks) {
   update_user_path();
 };
 
+// function update_user_path() {
+//   let displayPath;
+
+//   // This first part, for handling paths inside the home directory, is correct.
+//   if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+//     if (path.length === 2) {
+//       displayPath = "~";
+//     } else {
+//       displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
+//     }
+//   } else {
+//     // For all other paths, build them from the root '/'
+//     // We slice from 1 to ignore the main root node, which has no title.
+//     const pathString = path.slice(1).map(p => p.title).join("/");
+//     displayPath = "/" + pathString;
+//   }
+
+//   // The rest of the function remains the same.
+//   full_path = user;
+//   if (user !== "") {
+//     full_path += ": ";
+//   }
+//   full_path += displayPath;
+//   full_path +=  " $";
+//   promptSymbol.textContent = full_path;
+// }
+
+// script.js
+
 function update_user_path() {
   let displayPath;
 
-  // This first part, for handling paths inside the home directory, is correct.
   if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
-    if (path.length === 2) {
-      displayPath = "~";
-    } else {
-      displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
-    }
+    displayPath = path.length === 2 ? "~" : "~/" + path.slice(2).map(p => p.title).join("/");
   } else {
-    // --- THIS IS THE FIX ---
-    // For all other paths, build them from the root '/'
-    // We slice from 1 to ignore the main root node, which has no title.
     const pathString = path.slice(1).map(p => p.title).join("/");
     displayPath = "/" + pathString;
   }
 
-  // The rest of the function remains the same.
-  full_path = user;
-  if (user !== "") {
-    full_path += ": ";
-  }
-  full_path += displayPath;
-  full_path +=  " $";
-  promptSymbol.textContent = full_path;
+  // --- 新增：为提示符构建带样式的 HTML ---
+  const userText = user ? user + ":" : "";
+  const pathText = displayPath;
+  const charText = " $";
+
+  // 保留纯文本版本，用于复制粘贴和历史记录
+  full_path = userText + pathText + charText;
+
+  // 构建用于显示的HTML
+  const userHtml = user ? `<span class="prompt-user">${escapeHtml(userText)}</span>` : '';
+  const pathHtml = `<span class="prompt-path">${escapeHtml(pathText)}</span>`;
+  const charHtml = `<span class="prompt-char">${escapeHtml(charText)}</span>`;
+
+  promptSymbol.innerHTML = userHtml + pathHtml + charHtml;
 }
 
-// =================================================================
-// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
-// =================================================================
 async function loginWithMicrosoft() {
     const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
 
@@ -1348,38 +1391,53 @@ DESCRIPTION
     });
     done();
   },
-  // Theme 
   theme: {
-    exec: (args, options) => {
-        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-        const themeName = args[0];
-        if (!themeName) {
-            return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+    exec: async (args, options) => {
+        const arg = args[0];
+        if (!arg) {
+            print(`Current theme: ${promptTheme}.`, 'info');
+            print(`Current background mode: ${backgroundMode} (${backgroundModeAuto ? 'auto' : 'manual'}).`, 'info');
+            print(`Supported themes: ${SUPPORTED_THEMES.join(', ')}.`, 'info');
+            print(`Supported modes: light, dark.`, 'info');
+            return;
         }
-        if (supportedThemes.includes(themeName)) {
-            applyTheme(themeName);
-            return `Theme set to ${themeName}.`;
+
+        // 处理 light/dark 手动切换
+        if (arg === 'light' || arg === 'dark') {
+            backgroundModeAuto = false; // 切换到手动模式
+            applyBackgroundMode(arg);
+            await setSetting('backgroundMode', arg);
+            await setSetting('backgroundModeAuto', false);
+            return `Background overlay manually set to ${arg} mode.`;
+        }
+
+        // 处理颜色主题切换
+        if (SUPPORTED_THEMES.includes(arg)) {
+            backgroundModeAuto = true; // 切换回自动模式
+            applyTheme(arg); // applyTheme 会自动处理 light/dark
+            await setSetting('backgroundModeAuto', true);
+            return `Theme set to ${arg}.`;
         } else {
-            return `Error: Theme '${themeName}' not supported.`;
+            return `Error: Unknown theme or mode '${arg}'.`;
         }
     },
     suggestions: (args) => {
         if (args.length <= 1) {
-            return ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+            return [...SUPPORTED_THEMES, 'light', 'dark'];
         }
         return [];
     },
     manual: `NAME
-  theme - change the terminal's color scheme
+  theme - change the terminal's color scheme and background mode
 
 SYNOPSIS
-  theme [<theme_name>]
+  theme [<theme_name> | light | dark]
 
 DESCRIPTION
-  Switches the visual theme of the terminal. If no theme is provided, it lists the current and available themes.
-
-AVAILABLE THEMES
-  default, ubuntu, powershell, cmd, kali, debian`
+  Switches the visual theme or the background overlay mode.
+  - Setting a <theme_name> will automatically select a light or dark overlay.
+  - Setting 'light' or 'dark' manually overrides the automatic selection.
+  If no argument is provided, it lists the current and available options.`
   },
 
   source: {
@@ -3744,6 +3802,19 @@ async function parseAndApplyStartrc(scriptContent) {
         }
         break;
 
+      case 'theme':
+            const themeArg = args[0]?.replace(/^['"]|['"]$/g, '');
+            if (themeArg === 'light' || themeArg === 'dark') {
+                backgroundModeAuto = false; // .startrc 中手动指定
+                applyBackgroundMode(themeArg);
+            } else if (SUPPORTED_THEMES.includes(themeArg)) {
+                backgroundModeAuto = true; // .startrc 中使用主题，则为自动模式
+                applyTheme(themeArg);
+            } else {
+                print(`[.startrc] Invalid theme or mode: '${themeArg}'`, 'error');
+            }
+            break;
+
       case 'about':
         const options = {};
         const aboutArgs = [];
@@ -3758,11 +3829,11 @@ async function parseAndApplyStartrc(scriptContent) {
         break;
 
       case 'theme':
-        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-        if (supportedThemes.includes(args[0])) {
-          applyTheme(args[0]);
+        const themeName = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (SUPPORTED_THEMES.includes(themeName)) {
+          applyTheme(themeName);
         } else {
-          print(`[.startrc] Invalid theme: '${args[0]}'`, 'error');
+          print(`[.startrc] Invalid theme: '${themeName}'`, 'error');
         }
         break;
       
@@ -3810,6 +3881,8 @@ async function parseAndApplyStartrc(scriptContent) {
   await setSetting('aliases', aliases);
   await setSetting('environmentVars', environmentVars);
   await setSetting('syntaxHighlighting', syntaxHighlightingEnabled);
+  await setSetting('backgroundMode', backgroundMode);
+  await setSetting('backgroundModeAuto', backgroundModeAuto);
 
 }
 
@@ -3842,6 +3915,8 @@ async function loadSettings() {
   const configData = await new Promise(resolve => chrome.storage.sync.get(['configMode', 'autosyncEnabled'], resolve));
   configMode = configData.configMode || 'storage'; // 默认为 'storage'
   autosyncEnabled = configData.autosyncEnabled || false;
+
+  backgroundModeAuto = await getSetting('backgroundModeAuto') ?? true;
 
   if (configMode === 'storage' || configMode === 'bookmark') {
     welcomeMsg();
@@ -3894,6 +3969,12 @@ async function loadSettings() {
   
   if (data.commandHistory) {
     previousCommands.push(...data.commandHistory);
+  }
+
+  const loadedBgMode = await getSetting('backgroundMode') ?? 'dark';
+  applyBackgroundMode(loadedBgMode);
+  if (!backgroundModeAuto) {
+    applyBackgroundMode(loadedBgMode);
   }
 
   // 5. Restore last used bookmark path
@@ -4860,8 +4941,22 @@ document.body.addEventListener("click", function(event) {
 function applyTheme(themeName) {
     document.body.className = `theme-${themeName}`;
     promptTheme = themeName;
-    applyCursorStyle(cursorStyle); // Reapply cursor style to ensure it matches the theme
+
+    // --- 新增：如果处于自动模式，则根据主题自动切换 light/dark ---
+    if (backgroundModeAuto) {
+        const newMode = THEME_MODES[themeName] || 'dark';
+        applyBackgroundMode(newMode);
+    }
+
+    applyCursorStyle(cursorStyle);
     saveTheme();
+}
+
+function applyBackgroundMode(mode) {
+    if (mode !== 'light' && mode !== 'dark') return;
+    document.body.classList.remove('light-mode', 'dark-mode');
+    document.body.classList.add(`${mode}-mode`);
+    backgroundMode = mode;
 }
 
 function applyCursorStyle(style) {
