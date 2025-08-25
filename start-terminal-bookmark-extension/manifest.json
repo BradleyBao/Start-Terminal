@@ -4,7 +4,7 @@
   "description": "__MSG_appDesc__",  
   "author": "Tian Yi, Bao",
   "homepage_url": "https://www.tianyibrad.com/projects/start_terminal",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "default_locale": "en",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
