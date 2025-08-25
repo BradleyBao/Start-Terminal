@@ -509,41 +509,42 @@ function linkify(text) {
     return { html, linksFound };
 }
 
-function updateInputDisplaySimple() {
-  if (isComposing) {
-    blockCursor.style.display = "none";
-    return;
-  }
+// function updateInputDisplaySimple() {
+//   if (isComposing) {
+//     blockCursor.style.display = "none";
+//     return;
+//   }
 
-  const currentActiveElement = document.activeElement;
-  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+//   const currentActiveElement = document.activeElement;
+//   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
 
-  if (cursorPosition === buffer.length) {
-    typedText.textContent = buffer;
-    blockCursor.style.display = "inline-block";
-  } else {
-    const charAtCursor = buffer[cursorPosition] || ' ';
-    typedText.innerHTML =
-      escapeHtml(buffer.substring(0, cursorPosition)) +
-      `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
-      escapeHtml(buffer.substring(cursorPosition + 1));
-    blockCursor.style.display = "none";
-  }
+//   if (cursorPosition === buffer.length) {
+//     typedText.textContent = buffer;
+//     blockCursor.style.display = "inline-block";
+//   } else {
+//     const charAtCursor = buffer[cursorPosition] || ' ';
+//     typedText.innerHTML =
+//       escapeHtml(buffer.substring(0, cursorPosition)) +
+//       `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
+//       escapeHtml(buffer.substring(cursorPosition + 1));
+//     blockCursor.style.display = "none";
+//   }
 
-  // After updating display, ensure the browser's caret/selection is also at cursorPosition
-  // This helps with IME positioning consistency.
-  // Only set caret if typedText was focused or body (implying typedText should be focused)
-  if (typedTextIsFocused || currentActiveElement === document.body ) {
-      setCaretAtOffset(typedText, cursorPosition);
-  }
-}
+//   // After updating display, ensure the browser's caret/selection is also at cursorPosition
+//   // This helps with IME positioning consistency.
+//   // Only set caret if typedText was focused or body (implying typedText should be focused)
+//   if (typedTextIsFocused || currentActiveElement === document.body ) {
+//       setCaretAtOffset(typedText, cursorPosition);
+//   }
+// }
 
 function updateInputDisplay () {
-  if (syntaxHighlightingEnabled) {
-    updateInputDisplayWithHighlight();
-  } else {
-    updateInputDisplaySimple();
-  }
+  // if (syntaxHighlightingEnabled) {
+  //   updateInputDisplayWithHighlight();
+  // } else {
+  //   updateInputDisplaySimple();
+  // }
+  updateInputDisplayWithHighlight();
 }
 
 // Function to update the input display (typedText and blockCursor)
@@ -677,14 +678,23 @@ function updateInputDisplayWithHighlight() {
     if (/^\s+$/.test(token)) {
       html += processChunk(token);
     } else {
-      if (!commandFound) {
+      if (syntaxHighlightingEnabled && !commandFound) {
         html += processChunk(token, 'cmd-highlight');
         commandFound = true;
-      } else if (token.startsWith('-')) {
+      } else if (syntaxHighlightingEnabled && token.startsWith('-')) {
         html += processChunk(token, 'comment-highlight');
       } else {
+        // 当 syntax 关闭时，所有部分都按普通文本处理
         html += processChunk(token);
       }
+      // if (!commandFound) {
+      //   html += processChunk(token, 'cmd-highlight');
+      //   commandFound = true;
+      // } else if (token.startsWith('-')) {
+      //   html += processChunk(token, 'comment-highlight');
+      // } else {
+      //   html += processChunk(token);
+      // }
     }
   }
 
@@ -3803,17 +3813,17 @@ async function parseAndApplyStartrc(scriptContent) {
         break;
 
       case 'theme':
-            const themeArg = args[0]?.replace(/^['"]|['"]$/g, '');
-            if (themeArg === 'light' || themeArg === 'dark') {
-                backgroundModeAuto = false; // .startrc 中手动指定
-                applyBackgroundMode(themeArg);
-            } else if (SUPPORTED_THEMES.includes(themeArg)) {
-                backgroundModeAuto = true; // .startrc 中使用主题，则为自动模式
-                applyTheme(themeArg);
-            } else {
-                print(`[.startrc] Invalid theme or mode: '${themeArg}'`, 'error');
-            }
-            break;
+        const themeArg = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (themeArg === 'light' || themeArg === 'dark') {
+            backgroundModeAuto = false; // .startrc 中手动指定
+            applyBackgroundMode(themeArg);
+        } else if (SUPPORTED_THEMES.includes(themeArg)) {
+            backgroundModeAuto = true; // .startrc 中使用主题，则为自动模式
+            applyTheme(themeArg);
+        } else {
+            print(`[.startrc] Invalid theme or mode: '${themeArg}'`, 'error');
+        }
+        break;
 
       case 'about':
         const options = {};
@@ -3828,14 +3838,14 @@ async function parseAndApplyStartrc(scriptContent) {
         commands.about.exec(aboutArgs, options); // 调用 about 命令
         break;
 
-      case 'theme':
-        const themeName = args[0]?.replace(/^['"]|['"]$/g, '');
-        if (SUPPORTED_THEMES.includes(themeName)) {
-          applyTheme(themeName);
-        } else {
-          print(`[.startrc] Invalid theme: '${themeName}'`, 'error');
-        }
-        break;
+      // case 'theme':
+      //   const themeName = args[0]?.replace(/^['"]|['"]$/g, '');
+      //   if (SUPPORTED_THEMES.includes(themeName)) {
+      //     applyTheme(themeName);
+      //   } else {
+      //     print(`[.startrc] Invalid theme: '${themeName}'`, 'error');
+      //   }
+      //   break;
       
       case 'cursor':
         const supportedCursors = ['block', 'bar', 'underline'];
