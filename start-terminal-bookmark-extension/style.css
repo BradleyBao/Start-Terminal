@@ -2,7 +2,8 @@
   --background-color: #0c0c0c;
   --foreground-color: #f6f6f6;
   --prompt-color: #f6f6f6;
-  --cursor-color: #f6f6f6;
+  /* --cursor-color: #f6f6f6; */
+  --cursor-color: var(--foreground-color);
   --selection-background: #f6f6f6;
   --selection-foreground: #0c0c0c;
   --folder-color: #4b92ef;
@@ -13,6 +14,8 @@
   --highlight-color: #d9a1d2;
   --hint-color: #87baf0;
   --placeholder-color: #888a85;
+  --comment-color: #8c8c8c;
+  --overlay-color: #000000;
 
   /* Prompt specific colors */
   --prompt-user-color: #cccccc;
@@ -25,9 +28,23 @@
   --terminal-font: 'Consolas', 'Menlo', 'Courier New', monospace;
 }
 
+.prompt-user, .prompt-host {
+    color: var(--prompt-user-color);
+}
+.prompt-path {
+    color: var(--prompt-path-color);
+}
+.prompt-char {
+    color: var(--prompt-char-color);
+}
+.prompt-extra {
+    color: var(--prompt-extra-color);
+}
+
 body {
   margin: 0;
-  background-color: #000;
+  /* background-color: #000; */
+  background-color: var(--overlay-color);
   color: rgb(255, 255, 255);
   /* font-family: monospace; */
   font-family: var(--terminal-font); 
@@ -46,70 +63,464 @@ body {
   background-size: cover;
   background-position: center;
   transition: opacity 0.5s ease-in-out;
+  
   opacity: 0.15; /* Default transparent background */
+}
+
+body.dark-mode {
+  --overlay-color: #000000;
+}
+body.light-mode {
+  --overlay-color: #ffffff;
+}
+
+body.theme-default {
+  /* This is an alias for the Tango Dark theme */
+  --background-color: #2e3436;
+  --foreground-color: #eeeeec;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #729fcf;
+  --exec-color: #8ae234;
+  --success-color: #8ae234;
+  --error-color: #ef2929;
+  --warning-color: #fce94f;
+  --highlight-color: #ad7fa8;
+  --hint-color: #729fcf;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
 }
 
 body.theme-ubuntu {
   --background-color: #300a24;
-  --foreground-color: #d3d7cf;
+  --foreground-color: #f7f7f7;
+  --cursor-color: var(--foreground-color);
   --folder-color: #729fcf;
-  --prompt-user-color: #8ae234; /* Green */
-  --prompt-host-color: #8ae234; /* Green */
-  --prompt-path-color: #729fcf; /* Blue */
-  --prompt-char-color: #d3d7cf; /* White */
+  --exec-color: #8ae234;
+  --success-color: #8ae234;
+  --error-color: #ef2929;
+  --warning-color: #fce94f;
+  --highlight-color: #ad7fa8;
+  --hint-color: #729fcf;
+  --prompt-user-color: #8ae234;
+  --prompt-host-color: #8ae234;
+  --prompt-path-color: #729fcf;
+  --prompt-char-color: #f7f7f7;
   --terminal-font: 'Ubuntu Mono', monospace;
 }
 
-/* PowerShell Theme */
 body.theme-powershell {
   --background-color: #012456;
-  --foreground-color: #cccccc;
+  --foreground-color: #eeeeee;
+  --cursor-color: var(--foreground-color);
   --folder-color: #ffff00;
-  --prompt-extra-color: #0175c8; /* Blue for 'PS' */
-  --prompt-path-color: #ffff00; /* Yellow */
-  --prompt-char-color: #ffff00; /* Yellow */
+  --exec-color: #00ff00;
+  --success-color: #00ff00;
+  --error-color: #ff0000;
+  --warning-color: #ffff00;
+  --highlight-color: #ff00ff;
+  --hint-color: #00ffff;
+  --prompt-extra-color: #eeeeee;
+  --prompt-path-color: #ffff00;
+  --prompt-char-color: #eeeeee;
   --terminal-font: 'Cascadia Code', monospace;
-  font-variant-ligatures: none;
 }
 
-/* Kali Linux Theme */
 body.theme-kali {
-  --background-color: #0c0c0c;
-  --foreground-color: #d9d9d9;
+  --background-color: #1a1a1a;
+  --foreground-color: #d0d0d0;
+  --cursor-color: var(--foreground-color);
   --folder-color: #0095ff;
-  --prompt-extra-color: #0095ff;  /* Blue for brackets */
-  --prompt-user-color: #0095ff;   /* Blue */
-  --prompt-host-color: #0095ff;   /* Blue */
-  --prompt-path-color: #ffffff;   /* White */
-  --prompt-char-color: #ff321f;   /* Red for '$' */
+  --exec-color: #00ff00;
+  --success-color: #00ff00;
+  --error-color: #ff321f;
+  --warning-color: #f0eaaa;
+  --highlight-color: #c792ea;
+  --hint-color: #0095ff;
+  --prompt-user-color: #0095ff;
+  --prompt-host-color: #d0d0d0;
+  --prompt-path-color: #d0d0d0;
+  --prompt-char-color: var(--foreground-color);
+  --prompt-extra-color: #d0d0d0;
   --terminal-font: 'Hack', monospace;
-
 }
 
-/* Debian Theme */
 body.theme-debian {
   --background-color: #1e1e1e;
   --foreground-color: #d0d0d0;
+  --cursor-color: var(--foreground-color);
   --folder-color: #87afd7;
-  --prompt-user-color: #5fafff; /* Light Blue */
-  --prompt-host-color: #afd787; /* Light Green */
-  --prompt-path-color: #ffaf00; /* Orange */
-  --prompt-char-color: #d0d0d0; /* White */
+  --exec-color: #afd787;
+  --success-color: #afd787;
+  --error-color: #d75f5f;
+  --warning-color: #ffaf00;
+  --highlight-color: #af87d7;
+  --hint-color: #5fafff;
+  --prompt-user-color: #5fafff;
+  --prompt-host-color: #afd787;
+  --prompt-path-color: #ffaf00;
+  --prompt-char-color: #d0d0d0;
   --terminal-font: 'Ubuntu Mono', monospace;
 }
 
-/* CMD Theme (for completeness) */
 body.theme-cmd {
   --background-color: #000000;
   --foreground-color: #c0c0c0;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #ffff00;
+  --exec-color: #00ff00;
+  --success-color: #00ff00;
+  --error-color: #ff0000;
+  --warning-color: #ffff00;
+  --highlight-color: #ff00ff;
+  --hint-color: #00ffff;
   --prompt-path-color: #c0c0c0;
   --prompt-char-color: #c0c0c0;
   --terminal-font: 'Consolas', 'Courier New', monospace;
 }
 
+/* --- Added Themes (Remastered) --- */
+
+body.theme-dos {
+  --background-color: #0000aa;
+  --foreground-color: #ffffff;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #ffff00;
+  --exec-color: #00ff00;
+  --success-color: #00ff00;
+  --error-color: #ff5555;
+  --warning-color: #ffff55;
+  --highlight-color: #ff55ff;
+  --hint-color: #55ffff;
+  --prompt-char-color: #ffffff;
+  --prompt-path-color: #ffffff;
+  --terminal-font: 'Perfect DOS VGA 437', 'Courier New', monospace;
+}
+
+body.theme-solarized-dark {
+  --background-color: #002b36;
+  --foreground-color: #839496;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #268bd2;
+  --exec-color: #859900;
+  --success-color: #859900;
+  --error-color: #dc322f;
+  --warning-color: #b58900;
+  --highlight-color: #6c71c4;
+  --hint-color: #2aa198;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-solarized-light {
+  --background-color: #fdf6e3;
+  --foreground-color: #657b83;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #268bd2;
+  --exec-color: #859900;
+  --success-color: #859900;
+  --error-color: #dc322f;
+  --warning-color: #b58900;
+  --highlight-color: #6c71c4;
+  --hint-color: #2aa198;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-monokai {
+  --background-color: #272822;
+  --foreground-color: #f8f8f2;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #a6e22e;
+  --exec-color: #a6e22e;
+  --success-color: #a6e22e;
+  --error-color: #f92672;
+  --warning-color: #e6db74;
+  --highlight-color: #66d9ef;
+  --hint-color: #ae81ff;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--hint-color);
+  --prompt-char-color: var(--error-color);
+}
+
+body.theme-dracula {
+  --background-color: #282a36;
+  --foreground-color: #f8f8f2;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #bd93f9;
+  --exec-color: #50fa7b;
+  --success-color: #50fa7b;
+  --error-color: #ff5555;
+  --warning-color: #f1fa8c;
+  --highlight-color: #ff79c6;
+  --hint-color: #8be9fd;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-gruvbox-dark {
+  --background-color: #282828;
+  --foreground-color: #ebdbb2;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #83a598;
+  --exec-color: #b8bb26;
+  --success-color: #b8bb26;
+  --error-color: #fb4934;
+  --warning-color: #fabd2f;
+  --highlight-color: #d3869b;
+  --hint-color: #8ec07c;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-nord {
+  --background-color: #2e3440;
+  --foreground-color: #d8dee9;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #88c0d0;
+  --exec-color: #a3be8c;
+  --success-color: #a3be8c;
+  --error-color: #bf616a;
+  --warning-color: #ebcb8b;
+  --highlight-color: #b48ead;
+  --hint-color: #81a1c1;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-matrix {
+  --background-color: #0d0d0d;
+  --foreground-color: #00ff41;
+  --cursor-color: #ffffff;
+  --folder-color: #33ff33;
+  --exec-color: #aaffaa;
+  --success-color: #33ff33;
+  --error-color: #ff3333;
+  --warning-color: #ffff33;
+  --highlight-color: #ffffff;
+  --hint-color: #00ff41;
+  --prompt-user-color: var(--foreground-color);
+  --prompt-path-color: var(--foreground-color);
+  --prompt-char-color: var(--foreground-color);
+  --terminal-font: 'Hack', 'Ubuntu Mono', monospace;
+}
+
+body.theme-one-dark {
+  --background-color: #282c34;
+  --foreground-color: #abb2bf;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #61afef;
+  --exec-color: #98c379;
+  --success-color: #98c379;
+  --error-color: #e06c75;
+  --warning-color: #e5c07b;
+  --highlight-color: #c678dd;
+  --hint-color: #56b6c2;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-red-sands {
+  --background-color: #4c1c1c;
+  --foreground-color: #f2e5d5;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #e89b52;
+  --exec-color: #d1b475;
+  --success-color: #d1b475;
+  --error-color: #e86a52;
+  --warning-color: #e8c952;
+  --highlight-color: #d18275;
+  --hint-color: #e89b52;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-github-dark {
+  --background-color: #0d1117;
+  --foreground-color: #c9d1d9;
+  --cursor-color: #ffffff;
+  --folder-color: #58a6ff;
+  --exec-color: #56d364;
+  --success-color: #56d364;
+  --error-color: #f85149;
+  --warning-color: #d29922;
+  --highlight-color: #a5d6ff;
+  --hint-color: #58a6ff;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+  --terminal-font: 'Cascadia Code', 'Hack', 'Ubuntu Mono', monospace;
+}
+
+body.theme-github-light {
+  --background-color: #ffffff;
+  --foreground-color: #24292f;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #0969da;
+  --exec-color: #1a7431;
+  --success-color: #1a7431;
+  --error-color: #cf222e;
+  --warning-color: #9a6700;
+  --highlight-color: #8250df;
+  --hint-color: #0969da;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+  --terminal-font: 'Cascadia Code', 'Hack', 'Ubuntu Mono', monospace;
+}
+
+body.theme-material-dark {
+  --background-color: #263238;
+  --foreground-color: #eeffff;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #82aaff;
+  --exec-color: #c3e88d;
+  --success-color: #c3e88d;
+  --error-color: #ff5370;
+  --warning-color: #ffcb6b;
+  --highlight-color: #c792ea;
+  --hint-color: #89ddff;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-material-light {
+  --background-color: #eceff1;
+  --foreground-color: #37474f;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #40c4ff;
+  --exec-color: #91b859;
+  --success-color: #91b859;
+  --error-color: #e53935;
+  --warning-color: #ffb62c;
+  --highlight-color: #ab47bc;
+  --hint-color: #29b6f6;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-ayu-dark {
+  --background-color: #0a0e14;
+  --foreground-color: #b3b1b1;
+  --cursor-color: #e6b450;
+  --folder-color: #39bae6;
+  --exec-color: #73d173;
+  --success-color: #73d173;
+  --error-color: #ff3333;
+  --warning-color: #e6b450;
+  --highlight-color: #59c2ff;
+  --hint-color: #39bae6;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-ayu-light {
+  --background-color: #fafafa;
+  --foreground-color: #5c6773;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #55b4d4;
+  --exec-color: #478c5b;
+  --success-color: #478c5b;
+  --error-color: #f07178;
+  --warning-color: #f29718;
+  --highlight-color: #a37acc;
+  --hint-color: #55b4d4;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-cyberpunk {
+  --background-color: #0d0221;
+  --foreground-color: #f5f5f5;
+  --cursor-color: #ff2e97;
+  --folder-color: #ff2e97;
+  --exec-color: #00f5d4;
+  --success-color: #00f5d4;
+  --error-color: #ff3864;
+  --warning-color: #f9f871;
+  --highlight-color: #9d4edd;
+  --hint-color: #08f7fe;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--warning-color);
+  --prompt-char-color: var(--folder-color);
+  --terminal-font: 'Hack', 'Ubuntu Mono', monospace;
+}
+
+body.theme-amber-crt {
+  --background-color: #1c1c1c;
+  --foreground-color: #ffb000;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #ffd050;
+  --exec-color: #ffc030;
+  --success-color: #ffc030;
+  --error-color: #ff6020;
+  --warning-color: #ffb000;
+  --highlight-color: #ffdd80;
+  --hint-color: #ffb000;
+  --prompt-char-color: #ffb000;
+  --prompt-path-color: #ffb000;
+  --terminal-font: 'Ubuntu Mono', 'Courier New', monospace;
+}
+
+body.theme-ocean {
+  --background-color: #0e2f44;
+  --foreground-color: #b5d2e7;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #68a4cc;
+  --exec-color: #8ab362;
+  --success-color: #8ab362;
+  --error-color: #e4717a;
+  --warning-color: #d9b875;
+  --highlight-color: #a381ff;
+  --hint-color: #68a4cc;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+}
+
+body.theme-tango-dark {
+  --background-color: #2e3436;
+  --foreground-color: #eeeeec;
+  --cursor-color: var(--foreground-color);
+  --folder-color: #729fcf;
+  --exec-color: #8ae234;
+  --success-color: #8ae234;
+  --error-color: #ef2929;
+  --warning-color: #fce94f;
+  --highlight-color: #ad7fa8;
+  --hint-color: #729fcf;
+  --prompt-user-color: var(--exec-color);
+  --prompt-path-color: var(--folder-color);
+  --prompt-char-color: var(--foreground-color);
+  --terminal-font: 'Ubuntu Mono', monospace;
+}
+
+
 .terminal {
   padding: 1rem;
   outline: none;
+}
+
+/* Style for auto-detected links in the terminal output */
+.terminal-link {
+    color: inherit;
+    text-decoration: none;  /* No underline by default */
+    cursor: pointer;
+}
+
+.terminal-link:hover {
+    text-decoration: underline; /* Add underline on mouse hover */
 }
 
 .typed-container {
@@ -130,7 +541,8 @@ body.theme-cmd {
   outline: none;
   user-select: none;
   caret-color: transparent;
-  color: var(--prompt-color);
+  /* color: var(--prompt-color); */
+  color: var(--foreground-color);
 
   line-height: 1.1;
 }
@@ -159,16 +571,175 @@ body.theme-cmd {
 }
 
 /* This is the style for the character AT the cursor position (in-text cursor) */
+/* .highlighted-char {
+  background-color: var(--cursor-color);
+  display: inline-block; 
+  animation: pulse 1.2s steps(1, start) infinite;
+} */
+
 .highlighted-char {
-  background-color: var(--cursor-color); /* Green background, like the block cursor */
-  color: var(--background-color);       /* Black text */
-  /* animation: blink 1s steps(2, start) infinite; */
-  display: inline-block; /* Ensures background covers the char properly */
-  /* If you want it to look like a selection, revert to:
-  background-color: #ffffff; 
-  color: #000000; 
-  animation: none; 
-  */
+  /* 基础样式：白色背景 + 白色文字，实现覆盖效果 */
+  background-color: var(--cursor-color);
+  color: var(--background-color);
+  display: inline-block;
+  /* 动画负责从基础样式切换到普通样式 */
+  animation: pulse 1.2s steps(1, start) infinite;
+}
+
+/* style.css */
+
+/* style.css */
+
+/* --- 最终修复：光标的静态与动画样式 --- */
+
+/* 1. 移动时的总开关：禁用动画 */
+.no-blink {
+    animation: none !important;
+}
+
+/* 2. 移动时行中字符的样式 (所有模式通用) */
+.highlighted-char.no-blink {
+    background-color: var(--cursor-color); /* 白底 */
+    color: var(--background-color);      /* 黑字 */
+}
+
+/* 3. 移动时 bar 和 underline 的线条需要被隐藏，因为被 block 样式取代 */
+/* .cursor-style-bar .highlighted-char.no-blink::after,
+.cursor-style-underline .highlighted-char.no-blink::after {
+    display: none;
+} */
+
+/* 4. 移动时行尾光标的样式 */
+/* Block 模式 (修复暴露 '_' 的问题) */
+.cursor.no-blink {
+    background-color: var(--cursor-color);
+    color: transparent;
+    /* color: var(--cursor-color); */
+    visibility: visible;
+}
+/* Bar 和 Underline 模式 (确保线条可见) */
+.cursor-style-bar .cursor.no-blink::after,
+.cursor-style-underline .cursor.no-blink::after {
+    visibility: visible;
+}
+
+
+/* --- 光标的默认（闪烁）样式 --- */
+
+.cursor, .highlighted-char {
+    position: relative;
+    color: var(--cursor-color);
+}
+
+/* Block 模式 (默认) */
+.highlighted-char {
+    background-color: var(--cursor-color);
+    color: var(--cursor-color);
+    display: inline-block;
+    /* animation: pulse 1.2s steps(1, start) infinite; */
+}
+
+/* Bar 模式 */
+.cursor-style-bar .highlighted-char {
+    background-color: transparent;
+    /* color: var(--foreground-color); */
+    color: inherit;
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
+    animation: none;
+}
+.cursor-style-bar .highlighted-char::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px;
+    width: 2px;
+    background-color: var(--cursor-color);
+}
+
+
+/* Underline 模式 */
+.cursor-style-underline .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color);
+    animation: none;
+}
+.cursor-style-underline .highlighted-char::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
+    /* animation: blink-bar 1.2s steps(1, start) infinite; */
+}
+
+.cursor, .highlighted-char {
+    position: relative;
+    
+}
+
+/* --- Bar Style ('|') --- */
+.cursor-style-bar .cursor {
+    color: transparent; /* Hide the original '_' text */
+    background-color: transparent;
+}
+.cursor-style-bar .cursor::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px; /* Position it precisely at the start */
+    width: 2px;
+    background-color: var(--cursor-color);
+    animation: none;
+}
+
+.cursor-style-bar .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color); /* Ensure original character is visible */
+}
+.cursor-style-bar .highlighted-char::after {
+    content: '';
+    position: absolute;
+    top: 0.1em;
+    bottom: 0.1em;
+    left: -1px;
+    width: 2px;
+    background-color: var(--cursor-color);
+}
+
+/* --- Underline Style ('_') --- */
+.cursor-style-underline .cursor {
+    color: transparent; /* Hide the original '_' text */
+    background-color: transparent;
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
+}
+.cursor-style-underline .cursor::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
+    
+}
+
+.cursor-style-underline .highlighted-char {
+    background-color: transparent;
+    color: var(--foreground-color);
+    /* animation: blink-bar 1.2s steps(2, start) infinite;  */
+}
+.cursor-style-underline .highlighted-char::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background-color: var(--cursor-color);
 }
 
 /* Style for IME composing text */
@@ -249,16 +820,16 @@ body.theme-cmd {
   width: 1ch; /* or use font-metric based width if possible */
   line-height: 1.1;
   background-color: var(--cursor-color);
-  animation: blink 1s steps(2, start) infinite;
+  animation: blink 1.2s steps(2, start) infinite;
 
   /* background-color: rgb(255, 255, 255); */
   /* animation: blink 1s steps(2, start) infinite; */
   /* margin-left: -1px; /* Optional: slight adjustment if needed */
 }
 
-.cursor.no-blink {
+/* .cursor.no-blink {
   animation: none;
-}
+} */
 
 @keyframes blink {
   to {
@@ -266,6 +837,35 @@ body.theme-cmd {
     background-color: transparent; */
     /* display: none; */
     visibility: hidden;
+  }
+}
+
+@keyframes blink-bar {
+  to {
+    background-color: transparent;
+    color: var(--foreground-color); /* 恢复为普通文字颜色 */
+  }
+}
+
+@keyframes pulse {
+  0% {
+    color: var(--background-color);
+    background-color: var(--cursor-color);
+  }
+  50% {
+    color: inherit;
+    background-color: transparent;
+  }
+  100% {
+    color: var(--background-color);
+    background-color: var(--cursor-color);
+  }
+}
+
+@keyframes blink-invert {
+  to {
+    background-color: transparent;
+    color: var(--foreground-color); /* 恢复为普通文字颜色 */
   }
 }
 
@@ -400,6 +1000,15 @@ body.theme-cmd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cmd-highlight {
+  color: var(--exec-color); /* 命令使用绿色 */
+  font-weight: bold;
+}
+
+.comment-highlight {
+  color: var(--placeholder-color); /* 选项和注释使用灰色提示色 */
 }
 
 ::selection {

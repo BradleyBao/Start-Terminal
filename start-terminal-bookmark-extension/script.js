@@ -1,5 +1,5 @@
 // script.js
-
+const startTime = Date.now();
 const output = document.getElementById("output");
 const typedText = document.getElementById("typedText"); // This will show text before cursor OR full text with highlighted char
 const blockCursor = document.querySelector(".typed-container .cursor"); // The '█'
@@ -14,6 +14,10 @@ const editorStatus = document.getElementById("editor-status");
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
+// cursor
+let isBlinkingPaused = false; 
+let blinkTimeout = 1000; 
+
 let control_cmd = false;
 let commanding = false;
 let input_mode = false;
@@ -22,11 +26,49 @@ let buffer = "";
 let cursorPosition = 0; // Tracks the cursor position within the buffer
 let isComposing = false; // For IME input
 
+// Piping 
+let isPiping = false;
+let pipeBuffer = [];
+
+let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
+
+// Config Var 
+let configMode = "storage"; // Storage or Bookmarks, storage by default
+let autosyncEnabled = false; // Control if two backends should be synced
+const SETTINGS_FOLDER_NAME = '.settings';
+const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle', 'syntaxHighlighting', 'backgroundMode', 'backgroundModeAuto'];
+
+// Cursor style
+let cursorStyle = 'block'; // To track the current cursor style
+
+const SUPPORTED_THEMES = [
+    'default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian',
+    'dos', 'solarized-dark', 'solarized-light', 'monokai', 'dracula',
+    'gruvbox-dark', 'nord', 'matrix', 'one-dark', 'red-sands',
+    'github-dark', 'github-light', 'material-dark', 'material-light',
+    'ayu-dark', 'ayu-light', 'cyberpunk', 'amber-crt', 'ocean', 'tango-dark'
+];
+
+let backgroundMode = 'dark';
+let backgroundModeAuto = true;
+
+const THEME_MODES = {
+  'default': 'dark', 'ubuntu': 'dark', 'powershell': 'dark', 'cmd': 'dark', 'kali': 'dark', 'debian': 'dark',
+  'dos': 'dark', 'solarized-dark': 'dark', 'monokai': 'dark', 'dracula': 'dark',
+  'gruvbox-dark': 'dark', 'nord': 'dark', 'matrix': 'dark', 'one-dark': 'dark', 'red-sands': 'dark',
+  'github-dark': 'dark', 'material-dark': 'dark', 'ayu-dark': 'dark', 'cyberpunk': 'dark', 'amber-crt': 'dark', 'ocean': 'dark', 'tango-dark': 'dark',
+  'solarized-light': 'light', 'github-light': 'light', 'material-light': 'light', 'ayu-light': 'light'
+};
+
+// Syntax 
+let syntaxHighlightingEnabled = false; // default is false
+
 let activeGrepPattern = null;
 
 
 let isEditing = false; 
 let editingBookmarkId = null; 
+let editingBookmarkTitle = null;
 
 let activeEditor = null;
 let unsavedChanges = false;
@@ -45,15 +87,24 @@ let aliases = {};
 
 let user = ""
 
-// const BROWSER_TYPE = detectBrowser();
+const BROWSER_TYPE = detectBrowser();
 let current = null;
 let root = null;
 let path = [];
+let homeDirNode = null;
 
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.1";
+const PRIVACY_POLICY_VERSION = "1.2";
+const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+
+// Some related links
+const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
+const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
+const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
+const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
+const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -61,7 +112,19 @@ const PRIVACY_POLICY_VERSION = "1.1";
 
 let promptTheme = "default"; // Default theme
 let promptOpacity = .15; // Default opacity for the prompt
-let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+
+// let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=pixiv";
+let promptBgRandomAPI = "https://rpic.origz.com/api.php?category=aesthetic";
+
+const start_terminal_ascii = [
+"   ______           __     ______              _           __",
+"  / __/ /____ _____/ /____/_  __/__ ______ _  (_)__  ___ _/ /",
+" _\\ \\/ __/ _ `/ __/ __/___// / / -_) __/  ' \\/ / _ \\/ _ `/ / ",
+"/___/\\__/\\_,_/_/  \\__/    /_/  \\__/_/ /_/_/_/_/_//_/\\_,_/_/  ",
+"                                                             "
+].join("\n");
+
+
 
 function get_fav(bookmarks) {
   root = bookmarks[0];
@@ -71,16 +134,59 @@ function get_fav(bookmarks) {
   update_user_path();
 };
 
-function update_user_path() {
-  full_path = user;
-  if (user !== "") {
-    full_path += ": ";
-  }
-  full_path += path.map(p => p.title || "~").join("/") || "/";
-  full_path +=  " $";
-  promptSymbol.textContent = full_path;
-}
+// function update_user_path() {
+//   let displayPath;
 
+//   // This first part, for handling paths inside the home directory, is correct.
+//   if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+//     if (path.length === 2) {
+//       displayPath = "~";
+//     } else {
+//       displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
+//     }
+//   } else {
+//     // --- THIS IS THE FIX ---
+//     // For all other paths, build them from the root '/'
+//     // We slice from 1 to ignore the main root node, which has no title.
+//     const pathString = path.slice(1).map(p => p.title).join("/");
+//     displayPath = "/" + pathString;
+//   }
+
+//   // The rest of the function remains the same.
+//   full_path = user;
+//   if (user !== "") {
+//     full_path += ": ";
+//   }
+//   full_path += displayPath;
+//   full_path +=  " $";
+//   promptSymbol.textContent = full_path;
+// }
+
+function update_user_path() {
+  let displayPath;
+
+  if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+    displayPath = path.length === 2 ? "~" : "~/" + path.slice(2).map(p => p.title).join("/");
+  } else {
+    const pathString = path.slice(1).map(p => p.title).join("/");
+    displayPath = "/" + pathString;
+  }
+
+  // --- 新增：为提示符构建带样式的 HTML ---
+  const userText = user ? user + ":" : "";
+  const pathText = displayPath;
+  const charText = " $";
+
+  // 保留纯文本版本，用于复制粘贴和历史记录
+  full_path = userText + pathText + charText;
+
+  // 构建用于显示的HTML
+  const userHtml = user ? `<span class="prompt-user">${escapeHtml(userText)}</span>` : '';
+  const pathHtml = `<span class="prompt-path">${escapeHtml(pathText)}</span>`;
+  const charHtml = `<span class="prompt-char">${escapeHtml(charText)}</span>`;
+
+  promptSymbol.innerHTML = userHtml + pathHtml + charHtml;
+}
 
 // Helper function to set caret position in contenteditable elements
 function setCaretAtOffset(element, offset) {
@@ -136,73 +242,6 @@ function setCaretAtOffset(element, offset) {
     if (document.activeElement !== element) {
         element.focus();
     }
-}
-
-// in script.js, add these two new functions
-
-function loginWithGoogle() {
-    // This uses Chrome's built-in Google auth helper, which is simpler than the manual flow.
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-        if (chrome.runtime.lastError || !token) {
-            print(`Google Auth Failed: ${chrome.runtime.lastError?.message || "User cancelled."}`, "error");
-            print("");
-            done();
-            commanding = false;
-            return;
-        }
-
-        // Use the token to get user info
-        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        })
-        .then(response => response.json())
-        .then(userInfo => {
-            if (userInfo.error) {
-                throw new Error(userInfo.error.message);
-            }
-
-            const gAuthData = { userInfo, token }; // Store user info and token
-            chrome.storage.sync.set({ gAuth: gAuthData, activeLogin: 'google' });
-            
-            user = userInfo.email || userInfo.name;
-            print(`Welcome, ${user}`, "success");
-            update_user_path();
-            print("");
-            done();
-        })
-        .catch(error => {
-            print(`Failed to get user info: ${error.message}`, "error");
-            print("");
-            done();
-        });
-        commanding = false;
-    });
-    
-}
-
-function logoutWithGoogle() {
-    chrome.storage.sync.get('gAuth', (data) => {
-        if (data.gAuth && data.gAuth.token) {
-            const token = data.gAuth.token;
-            // 1. Revoke the token to invalidate it on Google's side
-            fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
-            
-            // 2. Remove the token from Chrome's local cache
-            chrome.identity.removeCachedAuthToken({ token: token });
-        }
-
-        // 3. Clear our stored data
-        chrome.storage.sync.remove(['gAuth', 'activeLogin'], () => {
-            user = "";
-            update_user_path();
-            print("Logged out from Google.", "success");
-            print("");
-            
-        });
-        
-    });
-    commanding = false;
-    
 }
 
 
@@ -277,7 +316,7 @@ const manPages = {
   "wget": "NAME\n  wget - download a file\n\nSYNOPSIS\n  wget <url>\n\nDESCRIPTION\n  Initiates a download for the given <url> and displays a progress bar.",
   "grep": "NAME\n  grep - filter input\n\nSYNOPSIS\n  <command> | grep <pattern>\n\nDESCRIPTION\n  Filters the output of another command, showing only the lines that contain the specified <pattern>. It is case-insensitive.\n  Example: `history | grep ls`",
   "unset": "NAME\n  unset - unset environment variables\n\nSYNOPSIS\n  unset <name>\n\nDESCRIPTION\n  Removes the environment variable specified by <name>. This action is permanent for the current and future sessions.",
-  "default": "NAME\n  default - toggle the default action for unknown commands\n\nSYNOPSIS\n  default [on | off]\n\nDESCRIPTION\n  Controls the terminal's behavior when an unrecognized command is entered. Running `default` with no arguments will display the current mode.\n\n  on\tWhen this mode is enabled, any text that is not a valid command will be automatically treated as a web search query. This provides convenience by allowing you to search without typing the 'search' command first.\n\n  off\tThis is the standard mode. Unknown commands will result in an 'Unknown command' error, requiring you to explicitly use the 'search' command for web queries.\n\nEXAMPLES\n  default on\n  > cats and dogs  (This will now perform a search)\n\n  default off\n  > cats and dogs  (This will now produce an error)",
+  "default": "NAME\n  default - toggle the default action for unknown commands\n\nSYNOPSIS\n  default [on | off]\n\nDESCRIPTION\n  Controls the terminal's behavior when an unrecognized command is entered. Running `default` with no arguments will display the current mode.\n\n  on\tWhen this mode is enabled, any text that is not a valid command will be automatically treated as a web search query using your browser's default search engine. This provides convenience by allowing you to search without typing the 'search' command first.\n\n  off\tThis is the standard mode. Unknown commands will result in an 'Unknown command' error, requiring you to explicitly use the 'search' command for web queries.\n\nEXAMPLES\n  default on\n  > cats and dogs  (This will now perform a search)\n\n  default off\n  > cats and dogs  (This will now produce an error)",
   "search": "NAME\n  search - perform a web search\n\nSYNOPSIS\n  search [-b] <query>\n\nDESCRIPTION\n  Performs a search using the user's default search engine configured in the browser's main settings. This is the primary and policy-compliant way to search the web from the terminal.\n\nOPTIONS\n  -b\tOpens the search results in a new background tab, allowing you to continue working in the terminal.",
   "glogin": "NAME\n  glogin - log in with a Google account\n\nSYNOPSIS\n  glogin\n\nDESCRIPTION\n  Initiates the Google OAuth 2.0 flow to securely log you in. Your email address will be displayed in the prompt.",
   "glogout": "NAME\n  glogout - log out from your Google account\n\nSYNOPSIS\n  glogout\n\nDESCRIPTION\n  Logs you out from your Google account, revokes the authentication token, and clears stored credentials.",
@@ -296,33 +335,151 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
+/**
+ * Finds URLs in a string and wraps them in <a> tags.
+ * @param {string} text - The text to process.
+ * @returns {{html: string, linksFound: boolean}} An object containing the new HTML string and a flag indicating if links were found.
+ */
+function linkify(text) {
+    // A robust regex to find URLs (http, https, www)
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let linksFound = false;
+
+    // Use .replace() to find all URLs and wrap them in an <a> tag
+    const html = text.replace(urlRegex, (url) => {
+        linksFound = true;
+        let href = url;
+        // If the URL starts with 'www.', prepend 'http://' for the href attribute to make it a valid link
+        if (href.startsWith('www.')) {
+            href = 'http://' + href;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="terminal-link">${url}</a>`;
+    });
+
+    return { html, linksFound };
+}
+
+// function updateInputDisplaySimple() {
+//   if (isComposing) {
+//     blockCursor.style.display = "none";
+//     return;
+//   }
+
+//   const currentActiveElement = document.activeElement;
+//   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+
+//   if (cursorPosition === buffer.length) {
+//     typedText.textContent = buffer;
+//     blockCursor.style.display = "inline-block";
+//   } else {
+//     const charAtCursor = buffer[cursorPosition] || ' ';
+//     typedText.innerHTML =
+//       escapeHtml(buffer.substring(0, cursorPosition)) +
+//       `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
+//       escapeHtml(buffer.substring(cursorPosition + 1));
+//     blockCursor.style.display = "none";
+//   }
+
+//   // After updating display, ensure the browser's caret/selection is also at cursorPosition
+//   // This helps with IME positioning consistency.
+//   // Only set caret if typedText was focused or body (implying typedText should be focused)
+//   if (typedTextIsFocused || currentActiveElement === document.body ) {
+//       setCaretAtOffset(typedText, cursorPosition);
+//   }
+// }
+
+function updateInputDisplay () {
+  // if (syntaxHighlightingEnabled) {
+  //   updateInputDisplayWithHighlight();
+  // } else {
+  //   updateInputDisplaySimple();
+  // }
+  updateInputDisplayWithHighlight();
+}
+
 // Function to update the input display (typedText and blockCursor)
-function updateInputDisplay() {
+function updateInputDisplayWithHighlight() {
   if (isComposing) {
     blockCursor.style.display = "none";
     return;
   }
 
-  const currentActiveElement = document.activeElement;
-  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+  let html = '';
+  let bufferIndex = 0;
+
+  const processChunk = (text, className = '') => {
+    let chunkHtml = '';
+    for (const char of text) {
+      if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
+        // --- JS 关键修复：根据状态动态添加 no-blink 类 ---
+        let highlightClasses = 'highlighted-char';
+        if (isBlinkingPaused) {
+          highlightClasses += ' no-blink';
+        }
+        chunkHtml += `<span class="${highlightClasses}">${escapeHtml(char)}</span>`;
+      } else {
+        chunkHtml += escapeHtml(char);
+      }
+      bufferIndex++;
+    }
+    if (className) {
+      return `<span class="${className}">${chunkHtml}</span>`;
+    }
+    return chunkHtml;
+  };
+
+  const commentIndex = buffer.indexOf('#');
+  let commandPart = buffer;
+  let commentPart = '';
+
+  if (commentIndex !== -1) {
+    commandPart = buffer.substring(0, commentIndex);
+    commentPart = buffer.substring(commentIndex);
+  }
+
+  const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+  let commandFound = false;
+
+  for (const token of tokens) {
+    if (/^\s+$/.test(token)) {
+      html += processChunk(token);
+    } else {
+      if (syntaxHighlightingEnabled && !commandFound) {
+        html += processChunk(token, 'cmd-highlight');
+        commandFound = true;
+      } else if (syntaxHighlightingEnabled && token.startsWith('-')) {
+        html += processChunk(token, 'comment-highlight');
+      } else {
+        // 当 syntax 关闭时，所有部分都按普通文本处理
+        html += processChunk(token);
+      }
+      // if (!commandFound) {
+      //   html += processChunk(token, 'cmd-highlight');
+      //   commandFound = true;
+      // } else if (token.startsWith('-')) {
+      //   html += processChunk(token, 'comment-highlight');
+      // } else {
+      //   html += processChunk(token);
+      // }
+    }
+  }
+
+  if (commentPart) {
+    html += processChunk(commentPart, 'comment-highlight');
+  }
+
+  typedText.innerHTML = html;
 
   if (cursorPosition === buffer.length) {
-    typedText.textContent = buffer;
     blockCursor.style.display = "inline-block";
   } else {
-    const charAtCursor = buffer[cursorPosition] || ' ';
-    typedText.innerHTML =
-      escapeHtml(buffer.substring(0, cursorPosition)) +
-      `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
-      escapeHtml(buffer.substring(cursorPosition + 1));
     blockCursor.style.display = "none";
   }
 
-  // After updating display, ensure the browser's caret/selection is also at cursorPosition
-  // This helps with IME positioning consistency.
-  // Only set caret if typedText was focused or body (implying typedText should be focused)
-  if (typedTextIsFocused || currentActiveElement === document.body ) {
-      setCaretAtOffset(typedText, cursorPosition);
+  const currentActiveElement = document.activeElement;
+  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+  if (typedTextIsFocused || currentActiveElement === document.body) {
+    setCaretAtOffset(typedText, cursorPosition);
   }
 }
 
@@ -392,41 +549,153 @@ function findChildByTitleFileOrDir(children, title) { // For general lookup (fil
   return children.find(child => child.title === title);
 }
 
+/**
+ * Query or Create .setting bookmark folder 
+ * @param {boolean} createIfMissing - if true, will create the folder if it doesn't exist
+ * @returns {Promise<object|null>} return bookmark node of the settings folder or null if failed
+ */
+async function getOrCreateSettingsFolder(createIfMissing = false) {
+    if (!homeDirNode) return null;
+    let settingsFolder = (homeDirNode.children || []).find(child => child.title === SETTINGS_FOLDER_NAME);
+
+    if (!settingsFolder && createIfMissing) {
+        try {
+            settingsFolder = await new Promise((resolve, reject) => {
+                chrome.bookmarks.create({ parentId: homeDirNode.id, title: SETTINGS_FOLDER_NAME }, (newNode) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(newNode);
+                });
+            });
+            // 创建后，需要刷新 homeDirNode 的子节点列表
+            const homeDirUpdate = await new Promise(resolve => chrome.bookmarks.getSubTree(homeDirNode.id, results => resolve(results[0])));
+            if (homeDirUpdate) homeDirNode = homeDirUpdate;
+
+        } catch (e) {
+            print(`Error creating .settings folder: ${e.message}`, "error");
+            return null;
+        }
+    }
+    return settingsFolder;
+}
+
+/**
+ * 从 .settings 书签中读取一个配置项
+ * @param {string} key - 配置项名称 (e.g., 'aliases')
+ * @returns {Promise<any|null>} 返回解析后的数据或 null
+ */
+async function readSettingFromBookmark(key) {
+    const settingsFolder = await getOrCreateSettingsFolder(false);
+    if (!settingsFolder) return null;
+
+    const configFile = (settingsFolder.children || []).find(child => child.title === key);
+    if (configFile && configFile.url) {
+        try {
+            // 数据存储在URL的 hash 部分
+            const rawJson = decodeURIComponent(configFile.url.split('#')[1] || '');
+            return JSON.parse(rawJson);
+        } catch (e) {
+            console.error(`Error parsing setting from bookmark: ${key}`, e);
+            return null;
+        }
+    }
+    return null;
+}
+
+/**
+ * 将一个配置项写入 .settings 书签
+ * @param {string} key - 配置项名称
+ * @param {any} value - 要写入的数据
+ * @returns {Promise<boolean>} 返回是否成功
+ */
+async function writeSettingToBookmark(key, value) {
+    const settingsFolder = await getOrCreateSettingsFolder(true);
+    if (!settingsFolder) return false;
+
+    const jsonValue = JSON.stringify(value, null, 2);
+    // 使用 about:blank#... 的形式来存储数据，更安全、更标准
+    const dataUrl = `about:blank#${encodeURIComponent(jsonValue)}`;
+
+    const configFile = (settingsFolder.children || []).find(child => child.title === key);
+    try {
+        if (configFile) {
+            await new Promise((resolve, reject) => {
+                chrome.bookmarks.update(configFile.id, { url: dataUrl }, (node) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(node);
+                });
+            });
+        } else {
+            await new Promise((resolve, reject) => {
+                chrome.bookmarks.create({ parentId: settingsFolder.id, title: key, url: dataUrl }, (node) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(node);
+                });
+            });
+        }
+        return true;
+    } catch (e) {
+        print(`Error writing setting to bookmark '${key}': ${e.message}`, "error");
+        return false;
+    }
+}
+
+/**
+ * 统一的配置读取"路由器"
+ * @param {string} key - 配置项名称
+ * @returns {Promise<any>}
+ */
+async function getSetting(key) {
+    if (configMode === 'bookmark') {
+        const bookmarkSetting = await readSettingFromBookmark(key);
+        // 如果书签模式下读取失败（可能文件不存在），则优雅地回退到 storage
+        if (bookmarkSetting !== null) {
+            return bookmarkSetting;
+        }
+        print(`[warn] bookmark config '${key}' missing, using stored defaults`, "warning");
+    }
+    
+    // 默认或回退都从 storage 读取
+    const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
+    return storageData[key];
+}
+
+/**
+ * 统一的配置写入"路由器"
+ * @param {string} key - 配置项名称
+ * @param {any} value - 要写入的数据
+ */
+async function setSetting(key, value) {
+    const primaryWrite = configMode === 'bookmark'
+        ? writeSettingToBookmark(key, value)
+        : new Promise(resolve => chrome.storage.sync.set({ [key]: value }, resolve));
+
+    await primaryWrite;
+
+    if (autosyncEnabled) {
+        // 如果启用了自动同步，则也写入到另一个后端
+        const secondaryWrite = configMode === 'bookmark'
+            ? new Promise(resolve => chrome.storage.sync.set({ [key]: value }, resolve))
+            : writeSettingToBookmark(key, value);
+        await secondaryWrite;
+    }
+}
+
 
 const commands = {
-  // google: (args, options) => {
-  //   if (args.length === 0) return "Usage: google <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-  //   return true;
-  // },
-  // bing: (args, options) => {
-  //   if (args.length === 0) return "Usage: bing <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-  //   return true;
-  // },
-  // baidu: (args, options) => {
-  //   if (args.length === 0) return "Usage: baidu <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://www.baidu.com/s?wd=${encodeURIComponent(query)}`;
-  //   return true;
-  // },
+  search: (args, options) => {
+    if (args.length === 0) {
+        return "Usage: search [-b] <query>";
+    }
+    const query = args.join(" ");
+
+    // 使用官方 Chrome Search API
+    // 这将自动使用用户在浏览器设置中的默认搜索引擎
+    chrome.search.query({
+        text: query,
+        // 如果使用-b选项，则在新标签页中打开，否则在当前标签页中搜索。
+        disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" 
+    });
+  },
   goto: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: goto <url> [-b]";
@@ -454,53 +723,6 @@ const commands = {
     location.href = url;
     return true;
   },
-  search: (args, options) => {
-    if (args.length === 0) {
-        return "Usage: search [-b] <query>";
-    }
-    const query = args.join(" ");
-
-    // Uses the official Chrome Search API.
-    // This will automatically use the user's default search engine set in Chrome settings.
-    chrome.search.query({
-        text: query,
-        // If -b option is used, open in a new tab, otherwise search in the current tab.
-        disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" 
-    });
-  },
-  // youtube: (args, options) => {
-  //   if (args.length === 0) return "Usage: youtube <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-  //   return true;
-  // },
-  // bilibili: (args, options) => {
-  //   if (args.length === 0) return "Usage: bilibili <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://search.bilibili.com/all?keyword=${encodeURIComponent(query)}`;
-  //   return true;
-  // },
-  // spotify: (args, options) => {
-  //   if (args.length === 0) return "Usage: spotify <query> [-b]";
-  //   const query = args.join(" ");
-  //   if (options.b) {
-  //     // If -b option is used, open in a new tab
-  //     window.open(`https://open.spotify.com/search/${encodeURIComponent(query)}`, '_blank');
-  //     return true;
-  //   }
-  //   location.href = `https://open.spotify.com/search/${encodeURIComponent(query)}`;
-  //   return true;
-  // },
   ping: (args, options) => {
     // console.log(args, options);
     if (args.length === 0) return "Usage: ping <host> [-t] [-n <count>]";
@@ -533,235 +755,352 @@ const commands = {
     print(`${formattedDate}`);
     return " ";
   },
-  clear: (args, options) => {
-    clearOutput();
+  clear: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
-  cls: (args, options) => {
-    clearOutput();
+  cls: {
+    exec: () => clearOutput(),
+    manual: 
+`NAME
+  clear, cls - clear the terminal screen
+
+SYNOPSIS
+  clear
+  cls
+
+DESCRIPTION
+  Clears all previous output from the terminal screen.`
   },
-  ls: (args, options, pipedInput) => {
-    // 1. Handle -l (long format)
-    if (options.l) {
-        if (!current || !current.children) return ["Error: current directory not available."];
-        return current.children.map(child => {
-            const owner = user || 'root';
-            const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
-            const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
 
-            const typeChar = child.children ? "d" : "-";
-            const date = new Date(child.dateAdded || child.dateGroupModified || Date.now()).toLocaleString('sv-SE').substring(0, 16);
-            const typeClass = child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file');
-            
-            const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
-            const title = `<span class="output-line-inline output-${typeClass}">${escapeHtml(child.title)}</span>`;
-            return perms + title;
-        });
-    }
+  syntax: {
+    exec: (args) => {
+      const mode = args[0];
+      if (mode === 'on') {
+        syntaxHighlightingEnabled = true;
+        setSetting('syntaxHighlighting', true);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting enabled.";
+      } else if (mode === 'off') {
+        syntaxHighlightingEnabled = false;
+        setSetting('syntaxHighlighting', false);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting disabled.";
+      } else {
+        return `Syntax highlighting is currently ${syntaxHighlightingEnabled ? 'ON' : 'OFF'}. Usage: syntax <on|off>`;
+      }
+    },
+    suggestions: (args) => {
+      if (args.length <= 1) return ['on', 'off'];
+      return [];
+    },
+    manual: `NAME
+  syntax - toggle real-time syntax highlighting
 
-    // 2. Standard multi-column layout
-    if (!current || !current.children || current.children.length === 0) return [];
-    
-    const items = current.children.map(child => ({
-        title: child.title,
-        className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
-    })).sort((a, b) => a.title.localeCompare(b.title));
+SYNOPSIS
+  syntax [on|off]
 
-    // ★★★ FIX 1: Calculate width dynamically based on the actual terminal element ★★★
-    const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
-    if (isNaN(terminalWidth) || terminalWidth <= 0) { // Fallback if calculation fails
-        return items.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
-    }
-
-    const longestItemWidth = items.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
-    const colWidth = longestItemWidth + 2;
-
-    let numCols = Math.floor(terminalWidth / colWidth);
-    if (numCols <= 1) { // Fallback to single column if it doesn't fit
-        return items.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
-    }
-    
-    // 4. Build multi-column HTML output
-    const numRows = Math.ceil(items.length / numCols);
-    const outputLines = [];
-
-    for (let row = 0; row < numRows; row++) {
-        let lineHtml = '';
-        for (let col = 0; col < numCols; col++) {
-            const index = row + col * numRows;
-            if (index < items.length) {
-                const item = items[index];
-                const title = escapeHtml(item.title);
-                const currentVisualWidth = getVisualWidth(item.title);
-                const paddingNeeded = colWidth - currentVisualWidth;
-                
-                // ★★★ FIX 2: Use non-breaking spaces (&nbsp;) for padding to prevent collapsing ★★★
-                const padding = '&nbsp;'.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
-                
-                lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
-            }
-        }
-        outputLines.push(lineHtml);
-    }
-    return outputLines;
+DESCRIPTION
+  Enables or disables syntax highlighting for the command input line and command history output.
+  Running 'syntax' without arguments displays the current status.`
   },
-  cd: (args) => {
-    if (args.length === 0) {
-      return "Usage: cd <directory>";
-    }
-    const targetPath = args.join(' ');
+  welcome: {
+    exec: async () => {
+      const manifest = chrome.runtime.getManifest();
+      print(`Terminal Startup v${manifest.version} - ${detectBrowser()}`);
+      print("Author: Tian Yi, Bao");
+      print("");
+      print("Type 'help' for a list of commands.");
+      print("Type 'about' for more information about start-terminal.");
+      print("");
+      print(`What's new: ${UPDATE_LOG}`);
+      print("");
+      print("Default Search Behavior:", "highlight");
+      print(`  - Default Mode: ${default_mode ? 'ON' : 'OFF'}`, `${default_mode ? "success" : "warning"}`);
+      print("");
 
-    if (targetPath === "..") {
-        if (path.length > 1) {
-            path.pop();
-            current = path[path.length - 1];
-            saveCurrentPath();
-        }
+      // 检查并显示隐私政策更新
+      // const data = await new Promise(resolve => chrome.storage.sync.get('privacyPolicyVersion', resolve));
+      // if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+      //   print("Our Privacy Policy has been updated.", "highlight");
+      //   print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
+      //   print("Type 'privacy-ok' to dismiss this message.", "hint");
+      //   print("");
+      // }
+    },
+    manual: `NAME
+  welcome - display the welcome message and version information.
+
+SYNOPSIS
+  welcome`
+  },
+  cursor: (args) => {
+    const supportedStyles = ['block', 'bar', 'underline'];
+    const style = args[0];
+
+    if (!style) {
+        return `Current cursor style: ${cursorStyle}. Supported: ${supportedStyles.join(', ')}.`;
+    }
+
+    if (supportedStyles.includes(style)) {
+        applyCursorStyle(style);
+        // chrome.storage.sync.set({ cursorStyle: style }); // Save the setting
+        setSetting('cursorStyle', style);
+        return `Cursor style set to ${style}.`;
     } else {
-        const result = findNodeByPath(targetPath);
-        if (result && result.node) {
-            current = result.node;
-            path = result.newPathArray;
-            saveCurrentPath();
-        } else {
-            print(`cd: ${targetPath}: No such file or directory`, "error");
-        }
+        return `Error: Style '${style}' not supported. Use one of: ${supportedStyles.join(', ')}`;
     }
-    update_user_path();
   },
-  pwd: (args, options) => {
-    // We take the path array, ignore the first element (the root which has no title),
-    // map the rest to their titles, and join them with slashes.
-    // A single leading slash is added to represent the root directory.
-    const pathString = "/" + path.slice(1).map(p => p.title).join("/");
-    return pathString;
-  },
-  mkdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: mkdir <directory_name>");
-            return resolve();
-        }
-        const dirName = args.join(" ");
+  ls: {
+    exec: (args, options, pipedInput) => {
+        let targetNode;
+        const pathArg = args.join(' ');
 
-        const existing = findChildByTitle(current.children || [], dirName);
-        if (existing) {
-            print(`mkdir: cannot create directory '${dirName}': File exists`);
-            return resolve();
+        // --- 1. 新增：解析路径参数 ---
+        if (pathArg) {
+            const result = findNodeByPath(pathArg);
+            if (!result || !result.node) {
+                return `ls: cannot access '${pathArg}': No such file or directory`;
+            }
+            // 如果路径指向一个文件而不是文件夹，则直接打印文件名
+            if (!result.node.children) {
+                return result.node.title;
+            }
+            targetNode = result.node;
+        } else {
+            // 如果没有路径参数，则使用当前目录
+            targetNode = current;
+        }
+        // --- 路径解析结束 ---
+
+        // 2. 后续逻辑使用 targetNode 而不是 current
+        let allItems = (targetNode.children || []).map(child => ({
+            title: child.title,
+            node: child,
+            className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
+        }));
+
+        const itemsToDisplay = options.a 
+            ? allItems 
+            : allItems.filter(item => !item.title.startsWith('.'));
+        
+        itemsToDisplay.sort((a, b) => a.title.localeCompare(b.title));
+
+        if (options.l) {
+            if (itemsToDisplay.length === 0) return [];
+            return itemsToDisplay.map(item => {
+                const owner = user || 'root';
+                const ownerPadding1 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const ownerPadding2 = ' '.repeat(Math.max(0, 8 - getVisualWidth(owner)));
+                const typeChar = item.node.children ? "d" : "-";
+                const date = new Date(item.node.dateAdded || item.node.dateGroupModified).toLocaleString('sv-SE').substring(0, 16);
+                const perms = `<span class="output-line-inline">${typeChar}rwxr-xr-x ${owner}${ownerPadding1} ${owner}${ownerPadding2} ${date} </span>`;
+                const title = `<span class="output-line-inline output-${item.className}">${escapeHtml(item.title)}</span>`;
+                return perms + title;
+            });
         }
 
-        chrome.bookmarks.create(
-            { parentId: current.id, title: dirName },
-            (newFolder) => {
-                if (chrome.runtime.lastError) {
-                    print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
-                    resolve();
-                  } else {
-                    print(`Directory '${newFolder.title}' created.`);
-                    chrome.bookmarks.getSubTree(current.id, (results) => {
-                        if (results && results[0]) {
-                            current = results[0];
-                            path[path.length - 1] = current;
-                        }
-                        resolve();
-                    });
+        if (itemsToDisplay.length === 0) return [];
+        
+        const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
+        if (isNaN(terminalWidth) || terminalWidth <= 0) {
+            return itemsToDisplay.map(i => `<span class="output-${i.className}">${escapeHtml(i.title)}</span>`);
+        }
+        const longestItemWidth = itemsToDisplay.reduce((max, item) => Math.max(max, getVisualWidth(item.title)), 0);
+        const colWidth = longestItemWidth + 2;
+        let numCols = Math.floor(terminalWidth / colWidth);
+        if (numCols <= 1) {
+            return itemsToDisplay.map(item => `<span class="output-${item.className}">${escapeHtml(item.title)}</span>`);
+        }
+        const numRows = Math.ceil(itemsToDisplay.length / numCols);
+        const outputLines = [];
+        for (let row = 0; row < numRows; row++) {
+            let lineHtml = '';
+            for (let col = 0; col < numCols; col++) {
+                const index = row + col * numRows;
+                if (index < itemsToDisplay.length) {
+                    const item = itemsToDisplay[index];
+                    const title = escapeHtml(item.title);
+                    const currentVisualWidth = getVisualWidth(item.title);
+                    const paddingNeeded = colWidth - currentVisualWidth;
+                    const padding = ' '.repeat(paddingNeeded > 0 ? paddingNeeded : 0);
+                    lineHtml += `<span class="output-line-inline output-${item.className}">${title}</span>${padding}`;
                 }
             }
-        );
-    });
-  },
-  rm: (args, options) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rm [-r] [-f] <name>");
-            return resolve();
+            outputLines.push(lineHtml);
         }
+        return outputLines;
+    },
+    manual: `NAME
+  ls - list directory contents
+
+SYNOPSIS
+  ls [-la] [path]
+
+DESCRIPTION
+  List information about the bookmarks and folders in the specified [path].
+  If no path is given, the contents of the current directory are listed.
+
+  -l    use a long listing format.
+  -a    do not ignore entries starting with .`
+  },
+  cd: {
+    exec: (args) => {
+        // The original logic of the cd command is now inside the 'exec' property.
+        if (args.length === 0) {
+          return "Usage: cd <directory>";
+        }
+        const targetPath = args.join(' ');
+
+        if (targetPath === "..") {
+            if (path.length > 1) {
+                path.pop();
+                current = path[path.length - 1];
+                saveCurrentPath();
+            }
+        } else {
+            const result = findNodeByPath(targetPath);
+            if (result && result.node && result.node.children) { // Ensure it's a directory
+                current = result.node;
+                path = result.newPathArray;
+                saveCurrentPath();
+            } else if (result && result.node && !result.node.children) {
+                 print(`cd: ${targetPath}: Not a directory`, "error");
+                 return false;
+            } else {
+                print(`cd: ${targetPath}: No such file or directory`, "error");
+                return false;
+            }
+        }
+        update_user_path();
+    },
+    manual: "NAME\n  cd - change the current directory\n\nSYNOPSIS\n  cd <directory>\n  cd ..\n\nDESCRIPTION\n  Change the current bookmark folder to <directory>. 'cd ..' moves to the parent folder."
+  },
+  pwd: {
+    exec: () => "/" + path.slice(1).map(p => p.title).join("/"),
+    manual: 
+    `NAME
+  pwd - print name of current/working directory
+
+SYNOPSIS
+  pwd
+
+DESCRIPTION
+  Print the full path of the current bookmark folder.`
+  },
+  mkdir: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: mkdir <directory_name>"); return resolve(); }
+        const dirName = args.join(" ");
+        if (findChildByTitle(current.children || [], dirName)) {
+            print(`mkdir: cannot create directory '${dirName}': File exists`);
+            resolve(false);
+            return resolve(false);
+        }
+        chrome.bookmarks.create({ parentId: current.id, title: dirName }, async (newFolder) => {
+            if (chrome.runtime.lastError) {
+                print(`Error creating directory: ${chrome.runtime.lastError.message}`, "error");
+            } else {
+                print(`Directory '${newFolder.title}' created.`);
+                await refreshStateAfterModification(); // ★★★ Use the new refresh function
+            }
+            resolve();
+        });
+    }),
+    manual: `NAME
+  mkdir - make directories
+
+SYNOPSIS
+  mkdir <directory_name>
+
+DESCRIPTION
+  Create a new bookmark folder named <directory_name>.`
+  },
+
+  rm: {
+    exec: (args, options) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: rm [-r] [-f] <name>"); return resolve(); }
         const targetName = args.join(" ");
         const target = findChildByTitleFileOrDir(current.children || [], targetName);
-
         if (!target) {
             if (options.f) return resolve();
             print(`rm: cannot remove '${targetName}': No such file or directory`);
+            resolve(false);
             return resolve();
         }
-
         const isDirectory = !!target.children;
         const isRecursive = !!options.r;
 
-        const refreshCurrentAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-
-        if (isDirectory && isRecursive) {
-            chrome.bookmarks.removeTree(target.id, () => {
-                if (chrome.runtime.lastError) {
-                    print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
-                } else {
-                    print(`Recursively removed '${targetName}'.`);
-                }
-                refreshCurrentAndResolve();
-            });
-            return;
-        }
-
-        if (isDirectory && target.children.length > 0) {
-            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
-            return resolve();
-        }
-
-        chrome.bookmarks.remove(target.id, () => {
+        const removeCallback = async () => {
             if (chrome.runtime.lastError) {
                 print(`Error removing '${targetName}': ${chrome.runtime.lastError.message}`, "error");
             } else {
                 print(`Removed '${targetName}'.`);
             }
-            refreshCurrentAndResolve();
-        });
-    });
-  },
-  rmdir: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: rmdir <directory_name>");
-            return resolve();
-        }
-        const dirName = args.join(" ");
-        const target = findChildByTitleFileOrDir(current.children || [], dirName);
+            await refreshStateAfterModification(); // ★★★ Use the new refresh function
+            resolve();
+        };
 
-        if (!target) {
-            print(`rmdir: failed to remove '${dirName}': No such directory`);
+        if (isDirectory && isRecursive) {
+            chrome.bookmarks.removeTree(target.id, removeCallback);
+            return;
+        }
+        if (isDirectory && target.children.length > 0) {
+            print(`rm: cannot remove '${targetName}': Is a directory. Use -r to remove recursively.`);
             return resolve();
         }
-        if (!target.children) {
-            print(`rmdir: failed to remove '${dirName}': Not a directory`);
-            return resolve();
-        }
-        if (target.children.length > 0) {
-            print(`rmdir: failed to remove '${dirName}': Directory not empty`);
-            return resolve();
-        }
+        chrome.bookmarks.remove(target.id, removeCallback);
+    }),
+    manual: `NAME
+  rm - remove files or directories
 
-        chrome.bookmarks.remove(target.id, () => {
-            if (chrome.runtime.lastError) {
-                print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
-            } else {
-                print(`Removed directory '${dirName}'.`);
-            }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        });
-    });
+SYNOPSIS
+  rm [-r] [-f] <name>
+
+DESCRIPTION
+  Removes the specified bookmark or folder.
+
+  -r    remove directories and their contents recursively.
+  -f    force. Ignore nonexistent files, never prompt.`
   },
+  rmdir: (args) => new Promise(async (resolve) => {
+    if (args.length === 0) { print("Usage: rmdir <directory_name>"); return resolve(); }
+    const dirName = args.join(" ");
+    const target = findChildByTitleFileOrDir(current.children || [], dirName);
+    if (!target) {
+        print(`rmdir: failed to remove '${dirName}': No such directory`); 
+        resolve(false);
+        return resolve();
+    }
+    if (!target.children) {
+        print(`rmdir: failed to remove '${dirName}': Not a directory`); 
+        resolve(false);
+        return resolve();
+    }
+    if (target.children.length > 0) {
+        print(`rmdir: failed to remove '${dirName}': Directory not empty`); 
+        resolve(false);
+        return resolve();
+    }
+    chrome.bookmarks.remove(target.id, async () => {
+        if (chrome.runtime.lastError) {
+            print(`Error removing directory: ${chrome.runtime.lastError.message}`, "error");
+        } else {
+            print(`Removed directory '${dirName}'.`);
+        }
+        await refreshStateAfterModification(); // ★★★ Use the new refresh function
+        resolve();
+    });
+  }),
   'privacy-ok' : (args, options) => {
     awaiting();
     chrome.storage.sync.set({ privacyPolicyVersion: PRIVACY_POLICY_VERSION }, () => {
@@ -770,19 +1109,284 @@ const commands = {
     done();
   },
   // Theme 
-  theme: (args, options) => {
-    const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-    const themeName = args[0];
-    if (!themeName) {
-        return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
-    }
-    if (supportedThemes.includes(themeName)) {
-        applyTheme(themeName);
-        chrome.storage.sync.set({ theme: themeName }); // 保存新设置
-        return `Theme set to ${themeName}.`;
-    } else {
-        return `Error: Theme '${themeName}' not supported.`;
-    }
+  theme: {
+    exec: async (args, options) => {
+        const arg = args[0];
+        if (!arg) {
+            print(`Current theme: ${promptTheme}.`, 'info');
+            print(`Current background mode: ${backgroundMode} (${backgroundModeAuto ? 'auto' : 'manual'}).`, 'info');
+            print(`Supported themes: ${SUPPORTED_THEMES.join(', ')}.`, 'info');
+            print(`Supported modes: light, dark.`, 'info');
+            return;
+        }
+
+        // 处理 light/dark 手动切换
+        if (arg === 'light' || arg === 'dark') {
+            backgroundModeAuto = false; // 切换到手动模式
+            applyBackgroundMode(arg);
+            await setSetting('backgroundMode', arg);
+            await setSetting('backgroundModeAuto', false);
+            return `Background overlay manually set to ${arg} mode.`;
+        }
+
+        // 处理颜色主题切换
+        if (SUPPORTED_THEMES.includes(arg)) {
+            backgroundModeAuto = true; // 切换回自动模式
+            applyTheme(arg); // applyTheme 会自动处理 light/dark
+            await setSetting('backgroundModeAuto', true);
+            return `Theme set to ${arg}.`;
+        } else {
+            return `Error: Unknown theme or mode '${arg}'.`;
+        }
+    },
+    suggestions: (args) => {
+        if (args.length <= 1) {
+            return [...SUPPORTED_THEMES, 'light', 'dark'];
+        }
+        return [];
+    },
+    manual: `NAME
+  theme - change the terminal's color scheme and background mode
+
+SYNOPSIS
+  theme [<theme_name> | light | dark]
+
+DESCRIPTION
+  Switches the visual theme or the background overlay mode.
+  - Setting a <theme_name> will automatically select a light or dark overlay.
+  - Setting 'light' or 'dark' manually overrides the automatic selection.
+  If no argument is provided, it lists the current and available options.`
+  },
+
+  source: {
+    exec: async (args) => {
+      const targetFile = args[0] || '.startrc';
+
+      if (targetFile !== '.startrc') {
+        print(`source: only supports '.startrc' at the moment.`, 'error');
+        return;
+      }
+
+      // 步骤 1: 使用内存中的快照找到文件的 ID
+      const rcFileInMemory = await findFileInHome('.startrc');
+      if (!rcFileInMemory) {
+        print(`source: ${targetFile}: No such file or directory.`, 'error');
+        return;
+      }
+
+      print(`Reloading ${targetFile}...`, 'info');
+
+      // --- 关键修复：使用文件 ID 从 Chrome API 获取最新的书签数据 ---
+      const rcFileFresh = await new Promise(resolve => {
+        chrome.bookmarks.get(rcFileInMemory.id, (results) => {
+          resolve(results && results.length > 0 ? results[0] : null);
+        });
+      });
+
+      if (!rcFileFresh || !rcFileFresh.url) {
+        print(`source: Could not reload ${targetFile}. Bookmark may be invalid or deleted.`, 'error');
+        return;
+      }
+      // --- 修复结束 ---
+
+      // 步骤 2: 清空现有配置，准备接收新配置
+      Object.keys(aliases).forEach(key => delete aliases[key]);
+      Object.keys(environmentVars).forEach(key => delete environmentVars[key]);
+
+      // 步骤 3: 使用最新的文件内容进行解析和应用
+      try {
+        const scriptContent = decodeURIComponent(rcFileFresh.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent);
+        print(`${targetFile} reloaded successfully.`, 'success');
+      } catch (e) {
+        print(`Error reading or applying ${targetFile}: ${e.message}`, 'error');
+      }
+    },
+    manual: `NAME
+  source - read and execute commands from a file
+
+SYNOPSIS
+  source <filename>
+
+DESCRIPTION
+  Reads and executes commands from <filename> in the current shell context.
+  Currently, only 'source .startrc' is supported.`
+  },
+
+  config: {
+    exec: async (args) => {
+      const subCommand = args.shift() || 'status';
+      const mode = args[0];
+
+      switch (subCommand) {
+        case 'setup':
+          if (!['storage', 'bookmark', 'startrc'].includes(mode)) {
+            print("Usage: config setup <storage|bookmark|startrc>", "error");
+            return;
+          }
+
+          if (mode === 'startrc') {
+            // --- 全新的 .startrc 设置流程 ---
+            print("Setting up .startrc configuration mode...", "highlight");
+            let imported = false;
+
+            // 1. 检查并询问是否从 .settings 文件夹导入
+            const settingsFolder = await getOrCreateSettingsFolder();
+            if (settingsFolder) {
+              const confirmImportBookmark = await userInputMode("Found legacy '.settings' folder. Import from it? [Y/n] ");
+              print(`Found legacy '.settings' folder. Import from it? [Y/n] ${user_input_content}`);
+
+              if (confirmImportBookmark) {
+                const settingsToImport = {};
+                for (const key of CONFIG_KEYS) {
+                  settingsToImport[key] = await readSettingFromBookmark(key);
+                }
+                const startrcContent = generateStartrcContent(settingsToImport);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from .settings and created ~/.startrc.", "success");
+                
+                const confirmDelete = await userInputMode("Delete the old '.settings' folder? [Y/n] ");
+                print(`Delete the old '.settings' folder? [Y/n] ${user_input_content}`);
+                if (confirmDelete) {
+                  await new Promise(resolve => chrome.bookmarks.removeTree(settingsFolder.id, resolve));
+                  print("'.settings' folder removed.", "success");
+                }
+                imported = true;
+              }
+            }
+
+            // 2. 如果未从书签导入，则询问是否从 storage 导入
+            if (!imported) {
+              const confirmImportStorage = await userInputMode("Import settings from browser storage? [Y/n] ");
+              print(`Import settings from browser storage? [Y/n] ${user_input_content}`);
+
+              if (confirmImportStorage) {
+                const data = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+                const startrcContent = generateStartrcContent(data);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from storage and created ~/.startrc.", "success");
+                imported = true;
+              }
+            }
+            
+            // 3. 如果都未导入，则创建默认文件
+            if (!imported) {
+                const confirmCreateDefault = await userInputMode("Create a default .startrc file? [Y/n] ");
+                print(`Create a default .startrc file? [Y/n] ${user_input_content}`);
+                if (confirmCreateDefault) {
+                  await createOrUpdateStartrcFile(); // 不传参数，使用默认值
+                  print("Created default ~/.startrc file.", "success");
+                }
+            }
+            print("\nHint: You can now edit the config with: nano .startrc", "hint");
+
+          } else if (mode === 'bookmark') {
+            // --- 最终修复版本: 完整的交互式 bookmark 设置流程 ---
+            print("Setting up bookmark configuration mode...", "highlight");
+
+            let settingsFolder = await getOrCreateSettingsFolder(false); // 先检查，不创建
+
+            if (settingsFolder) {
+              print("'.settings' folder already exists. Mode switched.", "success");
+            } else {
+              // 如果文件夹不存在，开始询问流程
+              const confirmCreation = await userInputMode("This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ");
+              print(`This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ${user_input_content}`);
+
+              if (!confirmCreation) {
+                print("Operation aborted by user.", "warning");
+                return; // 用户不同意，则完全中止
+              }
+              
+              // 用户同意后，创建文件夹
+              settingsFolder = await getOrCreateSettingsFolder(true);
+              if (!settingsFolder) {
+                print("Error: Could not create the ~/.settings folder.", "error");
+                return;
+              }
+              print("Created '.settings' folder.", "success");
+
+              // 然后询问是否从 storage 迁移
+              const confirmMigration = await userInputMode("Migrate existing settings from browser storage? (No=create defaults) [Y/n] ");
+              print(`Migrate existing settings from browser storage? (No=create defaults) [Y/n] ${user_input_content}`);
+
+              let settingsToWrite;
+              if (confirmMigration) {
+                print("Migrating settings from storage...", "info");
+                settingsToWrite = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+              } else {
+                print("Creating default settings...", "info");
+                settingsToWrite = {}; // 创建空对象，以便后面使用默认值
+              }
+
+              // 定义默认值，用于填充缺失的配置
+              const defaultSettings = {
+                aliases: {},
+                environmentVars: {},
+                theme: 'default',
+                cursorStyle: 'block',
+                settings: { default_mode: false, default_search_engine: "google" }
+              };
+              
+              // 循环所有必需的键，确保写入
+              const writePromises = [];
+              for (const key of CONFIG_KEYS) {
+                  const valueToWrite = settingsToWrite[key] ?? defaultSettings[key];
+                  if (valueToWrite !== undefined) {
+                      writePromises.push(writeSettingToBookmark(key, valueToWrite));
+                  }
+              }
+              await Promise.all(writePromises);
+              print("Configuration files created successfully.", "success");
+            }
+
+          } else if (mode === 'storage') {
+            print("Switching to browser storage mode.", "info");
+          }
+          configMode = mode;
+          await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
+          print(`Configuration mode set to: ${configMode}`, "success");
+          break;
+        
+        // ... 其他 case 保持不变 ...
+        case 'status':
+        default:
+          print("--- Configuration Status ---", "highlight");
+          print(`Current Mode: ${configMode}`);
+          print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
+          print("\nAvailable modes: 'storage', 'bookmark', 'startrc' (recommended)", "hint");
+          print("  config setup <mode> - Set the primary settings backend.");
+          break;
+      }
+    },
+    // ... suggestions 和 manual 部分保持不变 ...
+    suggestions: (args) => {
+      const subCommand = args[0];
+      if (args.length <= 1) {
+        return ['setup', 'sync', 'autosync', 'status'];
+      }
+      if (subCommand === 'setup' && args.length <= 2) {
+        return ['startrc', 'storage', 'bookmark'];
+      }
+      return [];
+    },
+    manual: `NAME
+  config - manage terminal configuration
+
+SYNOPSIS
+  config [setup <mode> | status]
+
+DESCRIPTION
+  Manages how and where terminal settings are stored.
+
+  setup <startrc|storage|bookmark>
+    Sets the primary settings backend.
+    'startrc' (Recommended): Executes a ~/.startrc file on startup for maximum flexibility.
+    'storage' (Legacy): Uses the browser's sync storage.
+    'bookmark' (Legacy): Uses a hidden ~/.settings folder in your bookmarks bar.
+
+  status
+    Displays the current configuration mode.`
   },
 
   uploadbg: () => {
@@ -812,30 +1416,28 @@ const commands = {
     }
     return ""; // Return empty string for a clean prompt return
   },
-  cat: (args, options) => {
-    if (args.length === 0) {
-      return "Usage: cat <bookmark_name>";
-    }
-    const targetName = args.join(" ");
-    const target = findChildByTitleFileOrDir(current.children || [], targetName);
+  cat: {
+    exec: (args) => {
+        if (args.length === 0) return "Usage: cat <bookmark_name>";
+        const targetName = args.join(" ");
+        const target = findChildByTitleFileOrDir(current.children || [], targetName);
+        if (!target) return `cat: ${targetName}: No such file or directory`;
+        if (target.children) return `cat: ${targetName}: Is a directory`;
+        print("--- Bookmark Details ---", "highlight");
+        print(`Title:    ${target.title}`);
+        print(`URL:      ${target.url}`);
+        if (target.dateAdded) print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
+        print("----------------------", "highlight");
+        return "";
+    },
+    manual: `NAME
+  cat - display bookmark details
 
-    if (!target) {
-      return `cat: ${targetName}: No such file or directory`;
-    }
+SYNOPSIS
+  cat <bookmark_name>
 
-    if (target.children) { // It's a directory
-      return `cat: ${targetName}: Is a directory`;
-    }
-
-    // It's a bookmark, print its details
-    print("--- Bookmark Details ---", "highlight");
-    print(`Title:    ${target.title}`);
-    print(`URL:      ${target.url}`);
-    if (target.dateAdded) {
-       print(`Added on: ${new Date(target.dateAdded).toLocaleString()}`);
-    }
-    print("----------------------", "highlight");
-    return "";
+DESCRIPTION
+  Displays the title, URL, and creation date of a specified bookmark.`
   },
 
   setbg: (args) => {
@@ -870,45 +1472,24 @@ const commands = {
     },
 
   default: (args, options) => {
-    // Change the default search engine
     if (args.length === 0) {
-      // print(`Current default search engine is ${default_search_engine}`, "highlight");
       print(`Current default mode is ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
-      return "Usage: default <search engine> (google, bing, baidu)";
+      return "Usage: default <on|off>";
     }
-    let arg = args[0];
+    let arg = args[0].toLowerCase();
     if (arg == "on") {
       default_mode = true;
-      print("Default mode is on. ", "success");
+      print("Default mode is now ON. Unknown commands will be searched.", "success");
       print("To turn it off, type 'default off'");
     } else if (arg == "off") {
       default_mode = false;
-      print("Default mode is off. ", "success");
+      print("Default mode is now OFF. Unknown commands will result in an error.", "success");
       print("To turn it on, type 'default on'");
+    } else {
+      print(`Invalid argument '${arg}'. Use 'on' or 'off'.`, "error");
     }
-    // else if (supported_search_engine.includes(arg)){
-    //   default_search_engine = arg;
-    //   if (!default_mode) {
-    //     print(`Successfully changed default search engine to ${arg}`);
-    //     print("If default mode is off, a command is required to search instead of directly inputting search content in the command prompt. You can turn it on by commanding 'default on'", "warning");
-    //   }
-    // }
-    // else {
-    //   print(`Unable to change default search engine: ${arg} is not supported.`, "error");
-    // }
     saveDefaultSettings();
-
   },
-  
-  // mslogin: () => {
-  //   print("Logging in with Microsoft");
-  //   awaiting();
-  //   commanding = true;
-  //   loginWithMicrosoft();
-  // },
-  // mslogout: () => {
-  //   logoutWithMicrosoft();
-  // },
   glogin: () => {
     print("Logging in with Google");
     awaiting();
@@ -951,68 +1532,59 @@ const commands = {
       applyUpdates();
     }
   },
-  history: (args, options, pipedInput) => {
-    if (previousCommands.length === 0) {
-      return ["No history yet."];
-    }
-    // Map history to an array of strings
-    return previousCommands.map((cmd, index) => {
-        const paddedIndex = String(index + 1).padStart(3, ' ');
-        return `${paddedIndex}  ${cmd}`;
-    });
+  history: {
+    exec: () => {
+        if (previousCommands.length === 0) return ["No history yet."];
+        return previousCommands.map((cmd, index) => `${String(index + 1).padStart(3, ' ')}  ${cmd}`);
+    },
+    manual: `NAME
+  history - display command history
+
+SYNOPSIS
+  history
+
+DESCRIPTION
+  Displays the list of previously executed commands.`
   },
 
-  touch: (args) => {
-    return new Promise((resolve) => {
-        if (args.length === 0) {
-            print("Usage: touch <filename>");
-            return resolve();
-        }
+  touch: {
+    exec: (args) => new Promise(async (resolve) => {
+        if (args.length === 0) { print("Usage: touch <filename>"); return resolve(); }
         const filename = args.join(" ");
-        const existing = findChildByTitleFileOrDir(current.children || [], filename);
-
-        if (existing) {
-            return resolve();
-        }
-
-        chrome.bookmarks.create({
-            parentId: current.id,
-            title: filename,
-            url: "about:blank#touched"
-        }, (newItem) => {
+        if (findChildByTitleFileOrDir(current.children || [], filename)) return resolve();
+        
+        chrome.bookmarks.create({ parentId: current.id, title: filename, url: "about:blank#touched" }, async (newItem) => {
             if (chrome.runtime.lastError) {
                 print(`Error: ${chrome.runtime.lastError.message}`, "error");
             }
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
+            await refreshStateAfterModification(); // ★★★ FIX IS HERE ★★★
+            resolve();
         });
-    });
+    }),
+    manual: `NAME
+  touch - create a new, empty bookmark
+
+SYNOPSIS
+  touch <filename>
+
+DESCRIPTION
+  Creates a new bookmark with the given <filename> and a blank URL. If a bookmark with the same name already exists, the command does nothing.`
   },
-  editlink: (args) => {
-    return new Promise((resolve) => {
+  editlink: {
+    exec: (args) => new Promise((resolve) => {
         if (args.length < 2) {
             print("Usage: editlink <bookmark_name> <new_url>");
             return resolve();
         }
         const bookmarkName = args.shift(); 
         const newUrl = args.join(' ');
-
         const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
-
         if (!target) {
-            print(`editlink: '${bookmarkName}': No such file or bookmark.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': No such file or bookmark.`); return resolve();
         }
         if (target.children) {
-            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`);
-            return resolve();
+            print(`editlink: '${bookmarkName}': Is a directory, cannot set a URL.`); return resolve();
         }
-
         chrome.bookmarks.update(target.id, { url: newUrl }, (updatedNode) => {
             if (chrome.runtime.lastError) {
                 print(`Error updating link: ${chrome.runtime.lastError.message}`, "error");
@@ -1020,7 +1592,6 @@ const commands = {
                 print(`Updated link for '${updatedNode.title}'.`);
                 print(`New URL: ${updatedNode.url}`, "success");
             }
-            
             chrome.bookmarks.getSubTree(current.id, (results) => {
                 if (results && results[0]) {
                     current = results[0];
@@ -1029,78 +1600,147 @@ const commands = {
                 resolve();
             });
         });
-    });
+    }),
+    manual: `NAME
+  editlink - change the URL of a bookmark
+
+SYNOPSIS
+  editlink <bookmark_name> <new_url>
+
+DESCRIPTION
+  Sets a new URL for the specified bookmark in the current directory. This is useful for updating links for bookmarks created with 'touch'.`
   },
-  mv: (args) => {
-    return new Promise((resolve) => {
+  mv: {
+    exec: async (args) => {
         if (args.length < 2) {
-            print("Usage: mv <source> <destination>");
-            return resolve();
+            print("Usage: mv <source> <destination_path>");
+            return;
         }
         const sourceName = args[0];
-        const destName = args[1];
+        const destArg = args[1];
+
         const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
         if (!sourceNode) {
             print(`mv: cannot stat '${sourceName}': No such file or directory`);
-            return resolve();
+            return;
         }
-        const destNode = findChildByTitleFileOrDir(current.children || [], destName);
 
-        const refreshAndResolve = () => {
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) {
-                    current = results[0];
-                    path[path.length - 1] = current;
-                }
-                resolve();
-            });
-        };
-        
-        if (destNode && destNode.children) {
-            chrome.bookmarks.move(sourceNode.id, { parentId: destNode.id }, (movedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+
+        // If destArg ends with '/', it's definitely a directory path.
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.'; // Handle case of just "/"
+            newName = sourceNode.title; // Keep original name
         } else {
-            chrome.bookmarks.update(sourceNode.id, { title: destName }, (updatedNode) => {
-                if (chrome.runtime.lastError) print(`Error: ${chrome.runtime.lastError.message}`, "error");
-                refreshAndResolve();
-            });
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                // No slash, means renaming in the current directory.
+                destPath = '.';
+                newName = destArg;
+            }
         }
-    });
+        if (newName === "") newName = sourceNode.title; // if path is like '~/folder/', newName is empty, so use original
+
+        const destDirResult = findNodeByPath(destPath);
+
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`mv: cannot move '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        const destParentId = destDirResult.node.id;
+
+        // Step 1: Move the node to the new parent directory.
+        await new Promise(resolve => {
+            chrome.bookmarks.move(sourceNode.id, { parentId: destParentId }, (movedNode) => {
+                if (chrome.runtime.lastError) {
+                    print(`Error moving: ${chrome.runtime.lastError.message}`, "error");
+                    resolve();
+                    return;
+                }
+                // Step 2: If a new name is specified, update the title.
+                if (newName && newName !== movedNode.title) {
+                    chrome.bookmarks.update(movedNode.id, { title: newName }, resolve);
+                } else {
+                    resolve();
+                }
+            });
+        });
+
+        await refreshStateAfterModification();
+    },
+    manual: `NAME
+  mv - move (rename) files
+
+SYNOPSIS
+  mv <source> <destination>
+
+DESCRIPTION
+  Renames <source> to <destination>, or moves <source> into <destination> if <destination> is an existing folder.`
   },
-  cp: async (args, options) => {
-    if (args.length < 2) {
-      return "Usage: cp [-r] <source> <destination>";
-    }
-    const sourceName = args[0];
-    const destName = args[1];
-    const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
-    if (!sourceNode) {
-      return `cp: cannot stat '${sourceName}': No such file or directory`;
-    }
-    if (sourceNode.children && !options.r) {
-      return `cp: -r not specified; omitting directory '${sourceName}'`;
-    }
-    const destNode = findChildByTitleFileOrDir(current.children || [], destName);
-    
-    try {
-      if (destNode && destNode.children) {
-        await copyNodeRecursively(sourceNode, destNode.id);
-      } else {
-        await copyNodeRecursively(sourceNode, current.id, destName);
-      }
-      
-      const results = await new Promise(res => chrome.bookmarks.getSubTree(current.id, res));
-      if (results && results[0]) {
-          current = results[0];
-          path[path.length - 1] = current;
-      }
-    } catch (e) {
-      print(`Error copying: ${e.message}`, "error");
-    }
+
+  cp: {
+    exec: async (args, options) => {
+        if (args.length < 2) return "Usage: cp [-r] <source> <destination_path>";
+        const sourceName = args[0];
+        const destArg = args[1];
+
+        const sourceNode = findChildByTitleFileOrDir(current.children || [], sourceName);
+        if (!sourceNode) return `cp: cannot stat '${sourceName}': No such file or directory`;
+        if (sourceNode.children && !options.r) return `cp: -r not specified; omitting directory '${sourceName}'`;
+
+        // --- NEW PATH PARSING LOGIC ---
+        let destPath = destArg;
+        let newName = null;
+        
+        if (destArg.endsWith('/')) {
+            destPath = destArg.slice(0, -1) || '.';
+            newName = sourceNode.title;
+        } else {
+            const lastSlashIndex = destArg.lastIndexOf('/');
+            if (lastSlashIndex !== -1) {
+                destPath = destArg.substring(0, lastSlashIndex);
+                newName = destArg.substring(lastSlashIndex + 1);
+            } else {
+                destPath = '.';
+                newName = destArg;
+            }
+        }
+        if (newName === "") newName = sourceNode.title;
+
+        const destDirResult = findNodeByPath(destPath);
+        if (!destDirResult || !destDirResult.node || !destDirResult.node.children) {
+            print(`cp: cannot copy '${sourceName}' to '${destArg}': Not a directory`);
+            return;
+        }
+
+        // --- EXECUTION LOGIC ---
+        try {
+            await copyNodeRecursively(sourceNode, destDirResult.node.id, newName);
+            await refreshStateAfterModification();
+        } catch (e) {
+            print(`Error copying: ${e.message}`, "error");
+        }
+    },
+    manual: `NAME
+  cp - copy files and directories
+
+SYNOPSIS
+  cp [-r] <source> <destination>
+
+DESCRIPTION
+  Copies <source> to <destination>.
+
+  -r    copy directories recursively.`
   },
-  find: (args, options) => {
+  find: {
+    exec: (args, options) => {
     return new Promise(resolve => {
         if (args.length == 0) {
             print("Usage: find -name <pattern>");
@@ -1118,6 +1758,15 @@ const commands = {
         resolve();
     });
   },
+  manual: `NAME
+  find - search for files in a directory hierarchy
+
+SYNOPSIS
+  find -name <pattern>
+
+DESCRIPTION
+  Searches for bookmarks/folders matching the <pattern> within the current directory. The pattern can include a wildcard '*' (e.g., 'find -name "*search*").`
+},
 
   alias: (args) => {
       if (args.length === 0) {
@@ -1141,10 +1790,10 @@ const commands = {
       const name = match[1];
       const command = match[2];
       aliases[name] = command;
-      chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      // chrome.storage.sync.set({ aliases: aliases }); // Persist aliases
+      setSetting('aliases', aliases);
       return `Alias '${name}' set.`;
   },
-
   unalias: (args) => {
       if (args.length === 0) {
           return "Usage: unalias <alias_name>";
@@ -1153,7 +1802,8 @@ const commands = {
 
       if (aliases.hasOwnProperty(aliasName)) {
           delete aliases[aliasName]; // Remove the alias from our object
-          chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          // chrome.storage.sync.set({ aliases: aliases }); // Save the updated object to storage
+          setSetting('aliases', aliases);
           return `Alias removed: ${aliasName}`;
       } else {
           return `unalias: no such alias: ${aliasName}`;
@@ -1165,13 +1815,23 @@ const commands = {
           return "What manual page do you want?";
       }
       const page = args[0];
-      const content = manPages[page];
+      const commandDef = commands[page];
+      let content = null;
+
+      // Priority 1: Check for the '.manual' property in the new command format.
+      if (commandDef && typeof commandDef === 'object' && commandDef.manual) {
+          content = commandDef.manual;
+      } 
+      // Priority 2: Fallback to the old manPages object for backward compatibility.
+      else if (manPages[page]) {
+          content = manPages[page];
+      }
 
       if (!content) {
           return `No manual entry for ${page}`;
       }
 
-      // Print with pre-wrap to respect newlines in the man page content
+      // The logic for printing the manual content remains the same.
       const lines = content.split('\n');
       lines.forEach(line => {
         // Simple formatting for headings (uppercase)
@@ -1316,74 +1976,263 @@ const commands = {
   },
 
 
-  help: () => {
-    print("");
-    print("--- Terminal Help ---", "highlight");
-    print("");
+  // script.js (in the commands object)
 
-    print("Search Commands", "highlight");
-    // print("  google <query> [-b]   - Search with Google.");
-    // print("  bing <query> [-b]     - Search with Bing.");
-    // print("  baidu <query> [-b]    - Search with Baidu.");
-    // print("  yt <query> [-b]       - Search with YouTube.");
-    // print("  bilibili <query> [-b] - Search with Bilibili.");
-    // print("  spotify <query> [-b]  - Search with Spotify.");
-    print("  search <query> [-b]   - Search using your browser's default engine.");
-    print("");
-    
-    print("Navigation & Bookmarks", "highlight");
-    print("  ls [-l]               - List bookmarks in current directory.");
-    print("  cd <folder>           - Change directory to a bookmark folder.");
-    print("  cd ..                 - Go to parent directory.");
-    print("  pwd                   - Show current bookmark path.");
-    print("  goto <url> [-b]       - Navigate to a specific URL.");
-    print("  ./<bookmark_name>     - Open a bookmark in the current directory.");
-    print("");
+  help: {
+    exec: () => {
+        print("");
+        print("--- Terminal Help ---", "highlight");
+        print("");
 
-    print("File & Directory Operations", "highlight");
-    print("  mkdir <folder>        - Create a new bookmark folder.");
-    print("  touch <file>          - Create a new, empty bookmark.");
-    print("  mv <src> <dest>       - Move or rename a bookmark/folder.");
-    print("  cp [-r] <src> <dest>  - Copy a bookmark or folder.");
-    print("  rm [-r] <name>        - Remove a bookmark or folder.");
-    print("  rmdir <folder>        - Remove an empty bookmark folder.");
-    print("  find [-name <pat>]    - Find bookmarks/folders by name.");
-    print("  nano <file>           - Edit a bookmark.");
-    print("  editlink <file>       - Update a bookmark's url.");
-    print("");
+        print("Search Commands", "highlight");
+        print("  search <query> [-b]   - Search using your browser's default engine.");
+        print("  default <on|off>         - Manage the default search behavior.");
+        print("");
+        
+        print("Navigation & Bookmarks", "highlight");
+        print("  ls [-la]                        - List bookmarks in the current directory.");
+        print("  cd <folder>                     - Change directory.");
+        print("  pwd                             - Show current bookmark path.");
+        print("  goto <url> [-b]                 - Navigate to a specific URL.");
+        print("  tree                            - Display the directory tree structure.");
+        print("  ./<bookmark_name>               - Open a bookmark in the current directory.");
+        print("");
 
-    print("Browser & System Control", "highlight"); // <-- NEW SECTION
-    print("  tabs <ls|close|switch> - Manage browser tabs.");
-    print("  downloads <ls>        - List recent downloads.");
-    print("  wget <url>            - Download a file from a URL.");
-    print("  ping <host>           - Ping a host.");
-    print("  date                  - Show current date and time.");
-    print("  clear (or cls)        - Clear the terminal screen.");
-    print("  locale                - Show browser language settings.");
-    print("");
+        print("File & Directory Operations", "highlight");
+        print("  mkdir <folder>                  - Create a new bookmark folder.");
+        print("  touch <file>                    - Create a new, empty bookmark.");
+        print("  mv <src> <dest>                 - Move or rename a bookmark/folder.");
+        print("  cp [-r] <src> <dest>            - Copy a bookmark or folder.");
+        print("  rm [-r] <name>                  - Remove a bookmark or folder.");
+        print("  rmdir <folder>                  - Remove an empty bookmark folder.");
+        print("  find <path> -name <pattern>     - Find bookmarks/folders by name.");
+        print("  cat <bookmark>                  - Display details of a bookmark.");
+        print("");
+        
+        print("Editors", "highlight");
+        print("  nano <file>                     - Edit a bookmark or config file with a simple editor.");
+        print("  vim <file>                      - Edit a bookmark's raw data with a Vim-like editor.");
+        print("");
 
-    print("Shell, Environment & History", "highlight"); // <-- NEW SECTION
-    print("  export VAR=value      - Set an environment variable.");
-    print("  unset <VAR_NAME>      - Unset (delete) an environment variable.");
-    print("  env                   - Display environment variables.");
-    print("  grep <pattern>        - Filter input (used with pipes like `history | grep cd`).");
-    print("  history               - Show command history.");
-    print("  alias [name='cmd']    - Create or list command aliases.");
-    print("  unalias <name>        - Remove an alias.");
-    print("");
-    
-    print("Account & Customization", "highlight");
-    print("  glogin                - Log in with your Google account.");
-    print("  glogout               - Log out from your Google account.");
-    print("  theme <name>          - Change terminal theme.");
-    print("  uploadbg / setbg      - Manage custom background.");
-    print("  man <command>         - Show the manual page for a command.");
-    print("");
+        print("Browser & System Control", "highlight");
+        print("  tabs <ls|close|switch>          - Manage browser tabs.");
+        print("  downloads <ls>                  - List recent downloads.");
+        print("  wget <url>                      - Download a file from a URL.");
+        print("  ping <host>                     - Ping a host.");
+        print("  date                            - Show current date and time.");
+        print("  clear (or cls)                  - Clear the terminal screen.");
+        print("");
 
-    print("For more details on a command, type: man <command_name>", "hint");
-    return ""; 
+        print("Shell, Environment & History", "highlight");
+        print("  source <file>                   - Reload and execute a configuration file (e.g., .startrc).");
+        print("  export VAR=value                - Set an environment variable.");
+        print("  unset <VAR_NAME>                - Unset an environment variable.");
+        print("  env                             - Display environment variables.");
+        print("  grep <pattern>                  - Filter piped input.");
+        print("  history                         - Show command history.");
+        print("  alias [name='cmd']              - Create or list command aliases.");
+        print("  unalias <name>                  - Remove an alias.");
+        print("");
+        
+        print("Account, Customization & Meta", "highlight");
+        print("  welcome                         - Display the startup welcome message.");
+        print("  syntax [on|off]                 - Toggle command syntax highlighting.");
+        print("  glogin / glogout                - Log in/out with a Google account.");
+        print("  theme <name>                    - Change terminal theme.");
+        print("  cursor <style>                  - Change cursor style (block, bar, underline).");
+        print("  uploadbg / setbg                - Manage custom background.");
+        print("  setbgAPI <url>                  - Set the random background image API URL.");
+        print("  config <setup|...>              - Manage how settings are stored (e.g., '.startrc' mode).");
+        print("  apt <update|upgrade>            - Check for or apply extension updates.");
+        print("  about [-V]                      - Show details about this extension.");
+        print("  feedback                        - Provide feedback or rate the extension.");
+        print("  man <command>                   - Show the manual page for a command.");
+        print("");
+
+        print("For more details on a command, type: man <command_name>", "hint");
+        return ""; 
+    },
+    manual: `NAME
+  help - display information about built-in commands
+
+SYNOPSIS
+  help
+
+DESCRIPTION
+  Displays a summary of all available commands, grouped by category.`
   },
+  about: {
+    exec: async (args, options) => {
+    const manifest = chrome.runtime.getManifest();
+
+    if (options.version || options.V || options.v) {
+        print(`Terminal Startup v${manifest.version}`);
+        print(`Privacy Policy Version v${PRIVACY_POLICY_VERSION}`);
+        return;
+    }
+
+    // ASCII Art Title
+    const titleArt = start_terminal_ascii.split('\n');
+
+    titleArt.forEach(line => print(line, 'highlight'));
+    print(""); // Spacer
+
+    // Gather all details into an array of objects
+    const details = [
+        { label: "Version", value: manifest.version },
+        { label: "Author", value: manifest.author },
+        { label: "License", value: "MIT License" },
+        { label: "Homepage", value: manifest.homepage_url },
+        { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
+        { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
+        { label: "Privacy Policy Version", value: PRIVACY_POLICY_VERSION },
+        { label: "User", value: user || "guest" },
+        { label: "Uptime", value: formatUptime(Date.now() - startTime) },
+        { label: "Browser", value: `${BROWSER_TYPE}` },
+        { label: "Language", value: navigator.language },
+    ];
+
+    const longestLabel = details.reduce((max, item) => Math.max(max, getVisualWidth(item.label)), 0);
+    const urlLabels = ["Homepage", "Repository", "Privacy Policy"];
+
+    // Print each detail in a formatted key-value pair
+    details.forEach(item => {
+        const padding = ' '.repeat(longestLabel - getVisualWidth(item.label));
+        let displayValue;
+
+        // --- START OF FIX ---
+        // Check if the current item's label is one that should contain a URL.
+        if (urlLabels.includes(item.label) && typeof item.value === 'string' && item.value.startsWith('http')) {
+            // If it is a URL, create an anchor tag for it.
+            displayValue = `<a href="${item.value}" target="_blank" rel="noopener noreferrer" class="terminal-link">${escapeHtml(item.value)}</a>`;
+        } else {
+            // For all other values, escape them to prevent any potential HTML injection.
+            displayValue = escapeHtml(String(item.value));
+        }
+        // --- END OF FIX ---
+
+        const line = `<span class="output-folder">${item.label}${padding}</span> : ${displayValue}`;
+        print(line, 'info', true);
+    });
+
+    return ""; // Return nothing to avoid an extra blank line from the engine
+  },
+},
+feedback: async () => {
+    print("How can we help?", "highlight");
+    print("");
+    print("[1] Rate The Extension");
+    print("[2] Feedback");
+    print("[3] Report a Bug or Suggest a Feature");
+    print("");
+
+    // Use the existing userInputMode to get the user's choice
+    const choice = await userInputMode("Enter a number (or press any other key to cancel): ");
+    
+    // The user input content is stored in the global `user_input_content` variable
+    // We need to echo it back so the user sees what they typed.
+    print(`Enter a number (or press any other key to cancel): ${user_input_content}`);
+
+    if (user_input_content === '1') {
+        print("Opening the Add-on store page...", "info");
+        window.open(STORE_URL, '_blank');
+    }else if (user_input_content === '2') {
+        print("Opening the feedback form...", "info");
+        window.open(FEEDBACK, '_blank');
+    } else if (user_input_content === '3') {
+        print("Opening the reporting form...", "info");
+        window.open(REPORT, '_blank');
+    } else {
+        print("Operation cancelled.", "warning");
+    }
+    return;
+},
 };
+
+/**
+ * Tokenizes a command line into segments based on logical operators.
+ * @param {string} line - The full input line.
+ * @returns {Array<object>} An array of command objects, e.g., [{ command: "cmd1", separator: "&&" }, ...]
+ */
+function tokenizeLine(line) {
+    const regex = /(\s*&&\s*|\s*\|\|\s*|\s*;\s*)/g;
+    const parts = line.split(regex);
+    
+    const tokens = [];
+    for (let i = 0; i < parts.length; i += 2) {
+        const command = parts[i].trim();
+        // The separator is what FOLLOWS the command. The last command has no explicit separator.
+        const separator = (parts[i + 1] || null)?.trim();
+        if (command) {
+            tokens.push({ command, separator });
+        }
+    }
+    return tokens;
+}
+
+/**
+ * Formats a duration in milliseconds to a human-readable string (e.g., "1m 23s").
+ * @param {number} ms - The duration in milliseconds.
+ * @returns {string} The formatted uptime string.
+ */
+function formatUptime(ms) {
+    if (ms < 1000) return `${ms}ms`;
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    let result = '';
+    if (minutes > 0) result += `${minutes}m `;
+    result += `${seconds}s`;
+    return result;
+}
+
+/**
+ * Recursively finds a node by its ID within a given tree.
+ * @param {object} node - The starting node (e.g., the root).
+ * @param {string} targetId - The ID of the node to find.
+ * @param {array} currentPathArray - The path array leading to the starting node.
+ * @returns {{node: object, path: array}|null}
+ */
+function findNodeById(node, targetId, currentPathArray) {
+    if (node.id === targetId) {
+        return { node: node, path: currentPathArray };
+    }
+    if (node.children) {
+        for (const child of node.children) {
+            const result = findNodeById(child, targetId, [...currentPathArray, child]);
+            if (result) return result;
+        }
+    }
+    return null;
+}
+
+/**
+ * Performs a full state refresh after a bookmark modification.
+ * Re-fetches the entire bookmark tree and rebuilds all path-related global variables.
+ */
+async function refreshStateAfterModification() {
+    const currentId = current.id; // Save the ID of our current location
+
+    // 1. Re-fetch the entire tree to get fresh data
+    const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+    
+    // 2. Re-initialize global root variables
+    root = bookmarkTree[0];
+    homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
+
+    // 3. Find our current location in the NEW tree and rebuild the path
+    const result = findNodeById(root, currentId, [root]);
+
+    if (result) {
+        // If our current directory still exists, restore the state
+        current = result.node;
+        path = result.path;
+    } else {
+        // If our directory was deleted (e.g., by 'rm -r .'), go back to home
+        current = homeDirNode;
+        path = [root, homeDirNode];
+    }
+}
 
 /**
  * Finds a bookmark node by a given path string (absolute or relative).
@@ -1391,70 +2240,141 @@ const commands = {
  * @returns {{node: object, newPathArray: array}|null} The found node and its full path array, or null if not found.
  */
 function findNodeByPath(pathStr) {
+    if (!pathStr) return null;
 
-    if (pathStr === '~') {
-        return { node: root, newPathArray: [root] };
+    // Handle '.' as a special case for the current directory
+    if (pathStr === '.') {
+        return { node: current, newPathArray: path };
     }
 
-    let startNode = current;
-    let pathSegments = pathStr.split('/').filter(s => s.length > 0);
-    let newPathArray = [...path]; // Start with a copy of the current path for relative search
+    let startNode;
+    let newPathArray;
+    let pathSegments;
 
-    // Check for absolute path
-    if (pathStr.startsWith('/') || pathStr.startsWith('~/')) {
+    // 1. Determine the starting point based on the path prefix
+    if (pathStr.startsWith('~/')) {
+        startNode = homeDirNode;
+        newPathArray = [root, homeDirNode];
+        pathSegments = pathStr.substring(2).split('/').filter(s => s.length > 0);
+    } else if (pathStr.startsWith('/')) {
         startNode = root;
         newPathArray = [root];
-    }
-    
-    // If the path was just "/" or "~/", return the root
-    if (pathSegments.length === 0 && (pathStr.startsWith('/') || pathStr.startsWith('~/'))) {
-        return { node: root, newPathArray: [root] };
+        pathSegments = pathStr.substring(1).split('/').filter(s => s.length > 0);
+    } else {
+        startNode = current;
+        newPathArray = [...path];
+        pathSegments = pathStr.split('/').filter(s => s.length > 0);
     }
 
+    if (pathSegments.length === 0) {
+        return { node: startNode, newPathArray: newPathArray };
+    }
+
+    // 2. Traverse the path, ensuring all intermediate parts are directories
     let currentNode = startNode;
-    for (const segment of pathSegments) {
-        if (!currentNode.children) {
-            return null; // Cannot traverse further
+    for (let i = 0; i < pathSegments.length - 1; i++) {
+        const segment = pathSegments[i];
+        if (!currentNode.children) return null; // Path is invalid
+
+        if (segment === '..') {
+            if (newPathArray.length > 1) newPathArray.pop();
+            currentNode = newPathArray[newPathArray.length - 1] || root;
+            continue;
         }
+
         const foundNode = currentNode.children.find(child => child.title === segment && child.children);
-        
         if (foundNode) {
             currentNode = foundNode;
             newPathArray.push(currentNode);
         } else {
-            return null; // Segment not found or is not a directory
+            return null; // An intermediate directory was not found
         }
     }
 
-    return { node: currentNode, newPathArray: newPathArray };
+    // 3. Find the final part of the path, which can be a FILE or a DIRECTORY
+    const lastSegment = pathSegments[pathSegments.length - 1];
+
+    if (lastSegment === '..') {
+        if (newPathArray.length > 1) newPathArray.pop();
+        currentNode = newPathArray[newPathArray.length - 1] || root;
+        return { node: currentNode, newPathArray: newPathArray };
+    }
+    
+    const finalNode = findChildByTitleFileOrDir(currentNode.children || [], lastSegment);
+
+    if (finalNode) {
+        if (finalNode.children) newPathArray.push(finalNode);
+        return { node: finalNode, newPathArray: newPathArray };
+    }
+
+    return null; // The final file/folder was not found
 }
 
 
+// Alias 
+// commands.yt = commands.youtube;
+
+// script.js
+
 function setupNanoEditor(args) {
-    if (args.length === 0) return "Usage: nano <bookmark_name>";
+    if (args.length === 0) {
+        print("Usage: nano <bookmark_name>");
+        return;
+    }
     const bookmarkName = args.join(' ');
     const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
 
-    if (!target) return `nano: '${bookmarkName}': No such file.`;
-    if (target.children) return `nano: '${bookmarkName}': Is a directory.`;
+    if (!target) {
+        print(`nano: '${bookmarkName}': No such file.`);
+        return;
+    }
+    if (target.children) {
+        print(`nano: '${bookmarkName}': Is a directory.`);
+        return;
+    }
 
     isEditing = true;
     activeEditor = 'nano';
     editingBookmarkId = target.id;
+    editingBookmarkTitle = target.title;
     unsavedChanges = false;
-
-    // Show nano fields, hide vim textarea
-    document.getElementById('nano-fields').style.display = 'block';
-    document.getElementById('editor-textarea').style.display = 'none';
     
-    editorTitleInput.value = target.title;
-    editorUrlInput.value = target.url;
+    // --- NANO .startrc 绿灯逻辑 ---
+    const isStartrcFile = editingBookmarkTitle === '.startrc';
+    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
+
+    document.getElementById('nano-fields').style.display = 'none';
+    const textarea = document.getElementById('editor-textarea');
+    textarea.style.display = 'block'; // 总是显示文本区域
+    textarea.readOnly = false;
+    
+    // 如果是 .startrc 或旧的配置文件，就从URL解码内容
+    if (isStartrcFile || isSettingsFile) {
+        try {
+            const rawContent = decodeURIComponent(target.url.split('#')[1] || '');
+            // 如果是旧的设置文件，美化一下JSON，否则直接显示内容
+            textarea.value = isSettingsFile ? JSON.stringify(JSON.parse(rawContent), null, 2) : rawContent;
+        } catch (e) {
+            textarea.value = `Error parsing file content: ${e.message}. Saving will overwrite.`;
+        }
+    } else {
+        // 对于普通书签，隐藏文本区，显示标题和URL输入框
+        textarea.style.display = 'none';
+        document.getElementById('nano-fields').style.display = 'block';
+        editorTitleInput.value = target.title;
+        editorUrlInput.value = target.url;
+        setTimeout(() => editorTitleInput.focus(), 0);
+    }
+    
+    if (textarea.style.display === 'block') {
+      setTimeout(() => textarea.focus(), 0);
+    }
+
     editorStatus.textContent = `Editing: ${target.title}`;
-    document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save &nbsp;&nbsp; <span class="editor-shortcut">^X</span> Exit`;
+    document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save    <span class="editor-shortcut">^X</span> Exit`;
     
     terminal.style.display = "none";
     editorView.style.display = "flex";
-    editorTitleInput.focus();
 }
 
 function setupVimEditor(args) {
@@ -1475,7 +2395,6 @@ function setupVimEditor(args) {
     textarea.style.display = 'block';
     textarea.readOnly = true;
 
-    // ★★★ THE FIX: Use the full bookmark object to display ALL properties ★★★
     // We use JSON.parse(JSON.stringify(...)) to get a clean, serializable copy of the object.
     const fullBookmarkData = JSON.parse(JSON.stringify(target));
     
@@ -1521,38 +2440,36 @@ function parseCommandLine(input) {
   const args = [];
   const options = {};
 
-  const optionRequiresValue = { // Define which options expect a value
+  const optionRequiresValue = {
       ping: ["n"],
-      // Add other commands and their value-expecting options if any
+      // Define other commands and their value-expecting options here if any
   };
   const commandSpecificOptionValues = optionRequiresValue[command] || [];
 
   for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
-      if (token.startsWith("-")) {
-          const optName = token.replace(/^-+/, "");
-          if (commandSpecificOptionValues.includes(optName) && tokens[i+1] && !tokens[i+1].startsWith("-")) {
-              options[optName] = tokens[i+1];
-              i++; // Skip next token as it's the value
+      if (token.startsWith("-") && !token.startsWith("--")) { // Handle short options like -a, -l, -al
+          const optString = token.substring(1); // e.g., "al" or "n"
+
+          // Check if this is an option that expects a value (like 'ping -n 5')
+          if (commandSpecificOptionValues.includes(optString) && tokens[i + 1] && !tokens[i + 1].startsWith("-")) {
+              options[optString] = tokens[i + 1];
+              i++; // Important: skip the next token as it's been consumed as a value
           } else {
-              options[optName] = true;
+              // ★★★ NEW LOGIC: Treat it as a set of single-character boolean flags ★★★
+              for (const char of optString) {
+                  options[char] = true; // This will set options['a']=true and options['l']=true
+              }
           }
+      } else if (token.startsWith("--")) { // Handle long options like --help (for future use)
+           const optName = token.substring(2);
+           options[optName] = true;
       } else {
           args.push(token);
       }
   }
   return { command, args, options };
 }
-
-// function logoutWithMicrosoft() {
-//   chrome.storage.sync.remove('msAuth', () => {
-//       user = "";
-//       update_user_path();
-//       print("Logged out from Microsoft.", "success");
-//       print("");
-//       done();
-//     });
-//   }
 
 // Add this helper function somewhere in your script.
 function displayTree(node, prefix = '', isLast = true) {
@@ -1646,9 +2563,23 @@ async function ping_func(url, options) {
 
 // ! VERY IMPORTANT FUNCTION 
 function print(text, type = "info", allowHtml = false) {
-  if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
-    return; // If it doesn't match, simply don't print.
+
+  if (isPiping) {
+    pipeBuffer.push(text);
+    return; // Divert output to the buffer and stop here.
   }
+
+  // if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
+  //   return; // If it doesn't match, simply don't print.
+  // }
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = allowHtml ? String(text) : escapeHtml(String(text));
+  if (activeGrepPattern && !activeGrepPattern.test(tempDiv.textContent || "")) {
+    return; // If it doesn't match the visible text, don't print.
+  }
+
+
   // 1. Record this print action to our history log
   outputHistory.push({ text, type, allowHtml });
 
@@ -1662,8 +2593,43 @@ function print(text, type = "info", allowHtml = false) {
   if (allowHtml) {
     contentSpan.innerHTML = content;
   } else {
-    contentSpan.innerHTML = escapeHtml(content);
+    // If plain text, use the safe linkify method.
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let lastIndex = 0;
+    let match;
+
+    contentSpan.textContent = ''; // Clear span before appending nodes
+
+    while ((match = urlRegex.exec(content)) !== null) {
+      // Append the text before the link
+      if (match.index > lastIndex) {
+        contentSpan.appendChild(document.createTextNode(content.substring(lastIndex, match.index)));
+      }
+      
+      // Create and append the link element
+      const url = match[0];
+      let href = url;
+      if (href.startsWith('www.')) {
+        href = 'http://' + href;
+      }
+      
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.className = 'terminal-link';
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.appendChild(document.createTextNode(url)); // Use createTextNode for safety
+      contentSpan.appendChild(anchor);
+
+      lastIndex = urlRegex.lastIndex;
+    }
+
+    // Append any remaining text after the last link
+    if (lastIndex < content.length) {
+      contentSpan.appendChild(document.createTextNode(content.substring(lastIndex)));
+    }
   }
+
   lineDiv.appendChild(contentSpan);
   output.appendChild(lineDiv);
 
@@ -1671,7 +2637,6 @@ function print(text, type = "info", allowHtml = false) {
     const paddingSpan = document.createElement('span');
     paddingSpan.className = 'line-padding';
 
-    // ★★★ THE FIX: Use getVisualWidth to calculate padding correctly ★★★
     const visualWidth = getVisualWidth(contentSpan.textContent || "");
     const terminalWidthChars = Math.floor(output.clientWidth / CHARACTER_WIDTH);
     
@@ -1687,6 +2652,14 @@ function print(text, type = "info", allowHtml = false) {
 
 
 function printLine(text, type = "info", endLine = false) {
+
+  if (isPiping) {
+    // For printLine, we need to handle how it builds a line.
+    // For now, a simple push is sufficient. More complex logic can be added if needed.
+    pipeBuffer.push(text);
+    return;
+  }
+
   if (activeGrepPattern && !activeGrepPattern.test(textStr)) {
       return; // If it doesn't match, simply don't print.
   }
@@ -1852,15 +2825,6 @@ function expandVariables(input) {
 async function executePipeline(pipelineStr) {
     const pipedCommands = pipelineStr.split('|').map(c => c.trim());
 
-    const lastCommand = pipedCommands[pipedCommands.length - 1];
-    if (lastCommand.startsWith('grep ')) {
-        const grepPattern = lastCommand.substring(5).trim();
-        if (grepPattern) {
-            activeGrepPattern = new RegExp(grepPattern, 'i');
-            pipedCommands.pop(); // Remove grep from the list of commands to execute
-        }
-    }
-
     let previousOutput = null;
 
     for (let i = 0; i < pipedCommands.length; i++) {
@@ -1913,40 +2877,53 @@ async function executePipeline(pipelineStr) {
         }
 
         const { command, args, options } = parsed;
-        const action = commands[command];
+        const commandDef = commands[command];
+        const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
 
         if (action) {
-            const result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
+
+            let result;
+            if (!isLastInPipe) {
+                // If this is not the last command, turn on piping mode
+                isPiping = true;
+                pipeBuffer = [];
+            }
+
+            result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
             previousOutput = result;
 
-            if (isLastInPipe) {
-                // ★★★ NEW AND IMPROVED PRINTING LOGIC ★★★
-                if (typeof result === 'string') {
-                    // Check if this single string result is the ls-grid block
-                    const isLsGrid = result.includes('class="ls-grid-container"');
-                    print(result, 'info', isLsGrid);
-                } else if (Array.isArray(result)) {
-                    // For each line in the array, check if it looks like HTML
-                    result.forEach(line => {
-                        const lineStr = String(line);
-                        // A simple heuristic: if it has tags, treat it as HTML.
-                        const allowHtmlOnThisLine = lineStr.includes('<') && lineStr.includes('>');
-                        print(lineStr, 'info', allowHtmlOnThisLine);
-                    });
+            if (isPiping) {
+                isPiping = false; // Turn off piping mode after the command runs
+                // Use the explicit return value if it exists (for ls, history, etc.),
+                // otherwise use what was captured from print() calls (for help, about, etc.).
+                previousOutput = Array.isArray(result) && result.length > 0 ? result : pipeBuffer;
+            } else {
+                // This is the last command, so we print its result.
+                if (result) {
+                    if (typeof result === 'string') {
+                        const isLsGrid = result.includes('class="ls-grid-container"');
+                        print(result, 'info', isLsGrid);
+                    } else if (Array.isArray(result)) {
+                        result.forEach(line => {
+                            const lineStr = String(line);
+                            const allowHtml = lineStr.includes('<') && lineStr.includes('>');
+                            print(lineStr, 'info', allowHtml);
+                        });
+                    }
                 }
             }
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    const query = finalCommand; // The entire unrecognized input is the query
+                    const query = finalCommand; // 整个无法识别的输入都作为查询
                     const disposition = options.b ? "NEW_TAB" : "CURRENT_TAB";
                     
                     chrome.search.query({ text: query, disposition: disposition });
                 } else {
-                    print(`Unknown command: '${command}'`, "error");
+                    print(`Unknown command: '${command}' (try 'help')`, "error");
                 }
             }
-            previousOutput = null;
+            previousOutput = null; // 在管道中中断
         }
     }
     activeGrepPattern = null; // Reset grep pattern after processing the pipeline
@@ -2002,23 +2979,70 @@ function handleSudoCheck(originalCommandStr) {
 }
 
 async function executeLine(line) {
-    const commandSegments = line.split(';').filter(cmd => cmd.trim() !== '');
-    
+
+    // Comments 
+    const originalLineToPrint = line;
+    line = line.split('#')[0].trim(); // Remove comments
+
     if (line.trim() === "") {
-        print(`${full_path} `);
+        print(`${full_path} ${originalLineToPrint}`); // Print the original line with comments
         print("");
+        done();
         return;
     }
     
-    print(`${full_path} ${line}`); // Echo the full line once
+    // print(`${full_path} ${line}`);
+    // print(`${full_path} ${originalLineToPrint}`);
+
+    if (syntaxHighlightingEnabled) {
+        const promptHtml = escapeHtml(full_path) + ' ';
+        const commandHtml = highlightLineForOutput(originalLineToPrint);
+        print(promptHtml + commandHtml, 'info', true);
+    } else {
+        print(`${full_path} ${originalLineToPrint}`);
+    }
+
+    const commandTokens = tokenizeLine(line);
+    let lastCommandSuccess = true;
 
     awaiting();
-    for (const segment of commandSegments) {
-        await executePipeline(segment);
+
+    for (const token of commandTokens) {
+        
+        // --- Decision Block: Decide whether to run the current command ---
+        if (lastCommandSuccess) {
+            // If the PREVIOUS command succeeded...
+            // We run the current command. The only exception is if the previous separator was '||',
+            // in which case the OR chain has already succeeded, so we start skipping.
+            if (token.previousSeparator === '&&') {
+                lastCommandSuccess = true; // The success of the OR chain carries forward
+                continue; // Skip this command
+            }
+        } else { // if lastCommandSuccess is false
+            // If the PREVIOUS command failed...
+            // We run the current command UNLESS the previous separator was '&&'.
+            if (token.previousSeparator === '||') {
+                lastCommandSuccess = false; // The failure of the AND chain carries forward
+                continue; // Skip this command
+            }
+        }
+        
+        // --- Execution ---
+        // If we passed the checks above, we are cleared to run.
+        let result = await executePipeline(token.command);
+        lastCommandSuccess = (result !== false);
+        
+        // Pass the separator of the command we just ran to the next token in the list.
+        const nextTokenIndex = commandTokens.indexOf(token) + 1;
+        if (commandTokens[nextTokenIndex]) {
+            commandTokens[nextTokenIndex].previousSeparator = token.separator;
+        }
     }
-    if (!commanding) { // If no async command like wget is running
-        done();
-        print("");
+    
+    // After the entire sequence is finished (or skipped), restore the prompt.
+    if (!commanding) {
+      done();
+      print("");
     }
 }
 
@@ -2097,6 +3121,7 @@ function done() {
     setCaretAtOffset(typedText, cursorPosition); // Ensure caret is correct after command
   }
   blockCursor.classList.remove('no-blink'); // Re-enable blinking
+  window.scrollTo(0, document.body.scrollHeight);
 }
 
 // SETTINGS 
@@ -2105,7 +3130,8 @@ function saveDefaultSettings() {
     // default_search_engine: default_search_engine,
     default_mode: default_mode,
   };
-  chrome.storage.sync.set({ settings });
+  // chrome.storage.sync.set({ settings }); // Old
+  setSetting('settings', settings); // New
 }
 
 function saveCommandHistory() {
@@ -2118,139 +3144,597 @@ function saveCurrentPath() {
   chrome.storage.sync.set({ bookmarkPath: pathIds });
 }
 
-async function refreshMicrosoftToken(refreshToken) {
-  print("Microsoft session token expired. Attempting to refresh...", "info");
-  const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
-  const params = new URLSearchParams();
-  params.append('client_id', 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'); // 您的客户端ID
-  params.append('scope', 'https://graph.microsoft.com/User.Read offline_access');
-  params.append('refresh_token', refreshToken);
-  params.append('grant_type', 'refresh_token');
+function loginWithGoogle() {
+    // This uses Chrome's built-in Google auth helper.
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+        if (chrome.runtime.lastError || !token) {
+            print(`Google Auth Failed: ${chrome.runtime.lastError?.message || "User cancelled."}`, "error");
+            print("");
+            commanding = false;
+            done();
+            return;
+        }
 
-  try {
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params,
+        // Use the token to get user info
+        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(response => response.json())
+        .then(userInfo => {
+            if (userInfo.error) {
+                throw new Error(userInfo.error.message);
+            }
+
+            const gAuthData = { userInfo, token }; // Store user info and token
+            chrome.storage.sync.set({ gAuth: gAuthData, activeLogin: 'google' });
+            
+            user = userInfo.email || userInfo.name;
+            print(`Welcome, ${user}`, "success");
+            update_user_path();
+            print("");
+            commanding = false;
+            done();
+        })
+        .catch(error => {
+            print(`Failed to get user info: ${error.message}`, "error");
+            print("");
+            commanding = false;
+            done();
+        });
     });
-    const tokenInfo = await response.json();
+}
 
-    if (tokenInfo.error) {
-      throw new Error(tokenInfo.error_description);
-    }
+function logoutWithGoogle() {
+    chrome.storage.sync.get('gAuth', (data) => {
+        if (data.gAuth && data.gAuth.token) {
+            const token = data.gAuth.token;
+            // 1. Revoke the token to invalidate it on Google's side
+            fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`);
+            
+            // 2. Remove the token from Chrome's local cache
+            chrome.identity.removeCachedAuthToken({ token: token });
+        }
 
-    // 刷新成功，保存新的Token和用户信息
-    const newExpirationTime = Date.now() + (tokenInfo.expires_in * 1000);
-    // 从旧的存储中获取用户信息，因为刷新流程不返回这个
-    const data = await chrome.storage.sync.get('msAuth');
-    const msAuthData = {
-      userInfo: data.msAuth.userInfo,
-      tokenInfo: tokenInfo,
-      expirationTime: newExpirationTime,
-    };
-
-    await chrome.storage.sync.set({ msAuth: msAuthData });
-    print("Session refreshed successfully.", "success");
-    return msAuthData;
-
-  } catch (error) {
-    print(`Session refresh failed: ${error.message}. Please log in again.`, "error");
-    // 清除无效的登录信息
-    await chrome.storage.sync.remove('msAuth');
-    return null;
-  }
+        // 3. Clear our stored data
+        chrome.storage.sync.remove(['gAuth', 'activeLogin'], () => {
+            user = "";
+            update_user_path();
+            print("Logged out from Google.", "success");
+            print("");
+            commanding = false;
+            done();
+        });
+    });
 }
 
 function showPrivacyUpdateNotice() {
     print("Our Privacy Policy has been updated.", "highlight");
     // print("Please review the changes at: ")
-    print("Please review the changes at: https://www.tianyibrad.com/docs/start_terminal_privacy_policy.", "info");
+    print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
     print("Type 'privacy-ok' to dismiss this message.", "hint");
     print("");
 }
 
 // Load all settings 
+// Old LoadSettings function, kept for reference
+// TODO will be removed in the future
+// async function loadSettings() {
+//   // 1. Get the complete bookmark tree asynchronously
+//   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+//   const trueRoot = bookmarkTree[0];
+  
+//   // --- FIX STARTS HERE ---
+  
+//   // Correctly assign the fetched bookmark tree to the global 'root' variable
+//   root = trueRoot; 
+
+//   // Set the home directory '~' to be the "Favorites bar"
+//   if (trueRoot.children && trueRoot.children.length > 0) {
+//     homeDirNode = trueRoot.children[0];
+//   } else {
+//     // Fallback: if there are no children, home is the same as the root.
+//     homeDirNode = root; 
+//   }
+
+//   // Set the starting location to the home directory.
+//   current = homeDirNode;
+//   // The path must reflect the full hierarchy, starting from the now-defined 'root'.
+//   path = [root, homeDirNode];
+
+//   // --- FIX ENDS HERE ---
+
+//   const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'msAuth', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'cursorStyle']);
+  
+//   // 3. Restore bookmark path
+//   if (data.bookmarkPath) {
+//     let restoredPathIsValid = true;
+//     let tempCurrent = root; // Start from the valid root
+//     let tempPath = [root];
+
+//     // Starting from the root, find each child by its ID to rebuild the path
+//     for (let i = 1; i < data.bookmarkPath.length; i++) {
+//       const nextId = data.bookmarkPath[i];
+//       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
+
+//       if (nextNode && nextNode.children) { // Ensure the node still exists and is a folder
+//         tempCurrent = nextNode;
+//         tempPath.push(nextNode);
+//       } else {
+//         restoredPathIsValid = false; // If a folder in the path was deleted, restoration fails
+//         break;
+//       }
+//     }
+
+//     if (restoredPathIsValid) {
+//       current = tempCurrent;
+//       path = tempPath;
+//     }
+//   }
+
+//   if (data.aliases) {
+//     aliases = data.aliases;
+//   }
+    
+//   if (data.settings) {
+//     default_mode = data.settings.default_mode ?? false;
+//     default_search_engine = data.settings.default_search_engine ?? "google";
+//   }
+
+//   if (data.commandHistory) {
+//     previousCommands.push(...data.commandHistory);
+//   }
+
+//   if (data.environmentVars) {
+//     environmentVars = data.environmentVars;
+//   }
+
+//   if (data.msAuth && data.msAuth.tokenInfo) {
+//     let currentAuth = data.msAuth;
+//     if (Date.now() > currentAuth.expirationTime) {
+//       // Token has expired, try to refresh it
+//       currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
+//     }
+
+//     if (currentAuth) {
+//       const user_info = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
+//       user = user_info;
+//       print(`Welcome back, ${user_info}`, "success");
+//     }
+//   }
+
+//   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+//     // If the privacy policy version does not match, show a notice
+//     setTimeout(() => showPrivacyUpdateNotice(), 100);
+//   }
+
+//   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  
+//   if (data.theme) {
+//     promptTheme = data.theme;
+//   }
+  
+//   if (data.imgAPI) {
+//     promptBgRandomAPI = data.imgAPI;
+//   }
+//   if (localData.customBackground) {
+//     promptOpacity = data.background_opacity;
+//     applyTheme(data.theme);
+//     applyBackground(localData.customBackground, data.background_opacity);
+//   } else {
+//     promptOpacity = data.background_opacity;
+//     applyTheme(promptTheme);
+//     applyBackground(null, promptOpacity); // Apply default background
+//   }
+
+//   //! Apply Cursor must be after applyTheme
+//   if (data.cursorStyle) {
+//     applyCursorStyle(data.cursorStyle);
+//   } else {
+//     applyCursorStyle('block'); // Apply default if nothing is saved
+//   }
+
+//   bgUploadInput.addEventListener('change', handleFileSelect);
+// }
+
+
+// script.js
+
+/**
+ * 根据一个设置对象生成 .startrc 文件的内容字符串。
+ * @param {object} settings - 包含配置的对象 (e.g., { theme: 'ubuntu', aliases: {...} })
+ * @returns {string} - 格式化后的 .startrc 文件内容。
+ */
+function generateStartrcContent(settings) {
+  let content = "# Auto-generated .startrc from previous settings\n\n";
+
+  // 处理主题
+  if (settings.theme) {
+    content += `# Set the visual theme.\n`;
+    content += `theme ${settings.theme}\n\n`;
+  }
+
+  // 处理光标样式
+  if (settings.cursorStyle) {
+    content += `# Set the cursor style.\n`;
+    content += `cursor ${settings.cursorStyle}\n\n`;
+  }
+
+  // 处理别名
+  if (settings.aliases && Object.keys(settings.aliases).length > 0) {
+    content += "# Command Aliases\n";
+    for (const name in settings.aliases) {
+      // 对包含空格的命令加引号
+      const command = settings.aliases[name];
+      content += `alias ${name}='${command}'\n`;
+    }
+    content += '\n';
+  }
+
+  // 处理环境变量
+  if (settings.environmentVars && Object.keys(settings.environmentVars).length > 0) {
+    content += "# Environment Variables\n";
+    for (const key in settings.environmentVars) {
+      const value = settings.environmentVars[key];
+      // 对包含空格的值加引号
+      content += `export ${key}="${value}"\n`;
+    }
+    content += '\n';
+  }
+  
+  // 添加欢迎消息
+  content += "# Welcome message\n";
+  content += "welcome\n\n";
+
+  content += "echo \"Settings imported. Welcome to the new .startrc mode!\"";
+  return content;
+}
+
+
+/**
+ * 为输出行生成高亮语法的HTML。
+ * @param {string} line - 要高亮的命令字符串。
+ * @returns {string} - 包含高亮标签的HTML字符串。
+ */
+function highlightLineForOutput(line) {
+    let html = '';
+    const commentIndex = line.indexOf('#');
+    let commandPart = line;
+    let commentPart = '';
+
+    if (commentIndex !== -1) {
+        commandPart = line.substring(0, commentIndex);
+        commentPart = line.substring(commentIndex);
+    }
+
+    const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+    let commandFound = false;
+
+    for (const token of tokens) {
+        const escapedToken = escapeHtml(token);
+        if (/^\s+$/.test(token)) {
+            html += escapedToken;
+        } else {
+            if (!commandFound) {
+                html += `<span class="cmd-highlight">${escapedToken}</span>`;
+                commandFound = true;
+            } else if (token.startsWith('-')) {
+                html += `<span class="comment-highlight">${escapedToken}</span>`;
+            } else {
+                html += escapedToken;
+            }
+        }
+    }
+    if (commentPart) {
+        html += `<span class="comment-highlight">${escapeHtml(commentPart)}</span>`;
+    }
+    return html;
+}
+
+/**
+ * 创建或更新 ~/.startrc 文件。
+ * @param {string|null} content - 要写入文件的内容。如果为null，则使用默认内容。
+ */
+async function createOrUpdateStartrcFile(content = null) {
+  let fileContent = content;
+  if (fileContent === null) {
+    // 默认配置
+    fileContent = `
+# Welcome to your .startrc file!
+# This file is for configuring your terminal on startup.
+# Lines starting with # or // are comments.
+
+welcome
+
+# Enable Command Highlighting. Default: off
+# syntax off
+
+# Set the visual theme. Supported: default, ubuntu, powershell, cmd, kali, debian
+theme ubuntu
+
+# Set the cursor style. Supported: block, bar, underline
+cursor block
+
+# Define command aliases. Use quotes for commands with spaces.
+alias ll='ls -l -a'
+alias g='google'
+
+# Set environment variables. Quotes are optional for simple values.
+export GREETING="Hello from .startrc!"
+export EDITOR=nano
+
+# You can also print messages on startup.
+echo ".startrc loaded successfully."
+    `.trim();
+  }
+  
+  const existingRc = await findFileInHome('.startrc');
+  if (existingRc) {
+    await new Promise(resolve => chrome.bookmarks.remove(existingRc.id, resolve));
+  }
+  const dataUrl = `about:blank#${encodeURIComponent(fileContent)}`;
+  await new Promise(resolve => chrome.bookmarks.create({ parentId: homeDirNode.id, title: '.startrc', url: dataUrl }, resolve));
+}
+
+function pauseBlinking() {
+  isBlinkingPaused = true;
+  blockCursor.classList.add('no-blink');
+  updateInputDisplay(); // 强制重绘以应用静态样式
+
+  clearTimeout(blinkTimeout);
+  blinkTimeout = setTimeout(() => {
+    isBlinkingPaused = false;
+    blockCursor.classList.remove('no-blink');
+    updateInputDisplay(); // 强制重绘以恢复动画
+  }, 1000);
+}
+
+/**
+ * 解析并应用 .startrc 文件的配置。 (修复后版本)
+ * @param {string} scriptContent - 从 .startrc 文件读取的配置内容。
+ */
+async function parseAndApplyStartrc(scriptContent) {
+  const lines = scriptContent.split('\n');
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // --- 修复1: 同时支持 '#' 和 '//' 作为注释 ---
+    if (trimmedLine === '' || trimmedLine.startsWith('#') || trimmedLine.startsWith('//')) {
+      continue;
+    }
+
+    const tokens = trimmedLine.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    const command = tokens.shift();
+    const args = tokens; // args 现在是包含引号的完整参数
+
+    switch (command) {
+      case 'welcome':
+        await commands.welcome.exec(); // 调用 welcome 命令
+        break;
+
+      case 'syntax':
+        const mode = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (mode === 'on') {
+          syntaxHighlightingEnabled = true;
+        } else if (mode === 'off') {
+          syntaxHighlightingEnabled = false;
+        }
+        break;
+
+      case 'about':
+        const options = {};
+        const aboutArgs = [];
+        args.forEach(arg => {
+          if (arg.startsWith('-')) { // 简单处理 -v, -V 这样的选项
+            for (const char of arg.substring(1)) options[char] = true;
+          } else {
+            aboutArgs.push(arg);
+          }
+        });
+        commands.about.exec(aboutArgs, options); // 调用 about 命令
+        break;
+
+      case 'theme':
+        const themeArg = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (themeArg === 'light' || themeArg === 'dark') {
+            backgroundModeAuto = false; // .startrc 中手动指定
+            applyBackgroundMode(themeArg);
+        } else if (SUPPORTED_THEMES.includes(themeArg)) {
+            backgroundModeAuto = true; // .startrc 中使用主题，则为自动模式
+            applyTheme(themeArg);
+        } else {
+            print(`[.startrc] Invalid theme or mode: '${themeArg}'`, 'error');
+        }
+        break;
+      
+      case 'cursor':
+        const supportedCursors = ['block', 'bar', 'underline'];
+        if (supportedCursors.includes(args[0])) {
+          applyCursorStyle(args[0]);
+        } else {
+          print(`[.startrc] Invalid cursor style: '${args[0]}'`, 'error');
+        }
+        break;
+
+      case 'alias':
+      case 'export':
+        const assignmentString = args.join(' ');
+        const match = assignmentString.match(/^([^=]+)=(.*)$/);
+        
+        if (match) {
+          const key = match[1];
+          // 去除值部分两端的引号
+          let value = match[2].trim().replace(/^['"]|['"]$/g, '');
+          
+          if (command === 'alias') {
+            aliases[key] = value;
+          } else {
+            environmentVars[key] = value;
+          }
+        } else {
+          print(`[.startrc] Invalid ${command} syntax: ${trimmedLine}`, 'error');
+        }
+        break;
+      
+      case 'echo':
+        // 去除参数两端的引号后打印
+        const echoMessage = args.map(arg => arg.replace(/^['"]|['"]$/g, '')).join(' ');
+        print(echoMessage);
+        break;
+
+      default:
+        print(`[.startrc] Unknown command: '${command}'`, 'error');
+        break;
+    }
+  }
+
+  await setSetting('aliases', aliases);
+  await setSetting('environmentVars', environmentVars);
+  await setSetting('syntaxHighlighting', syntaxHighlightingEnabled);
+  await setSetting('backgroundMode', backgroundMode);
+  await setSetting('backgroundModeAuto', backgroundModeAuto);
+}
+
+/**
+ * 在主目录中查找一个文件（非文件夹）。
+ * @param {string} fileName - 要查找的文件名。
+ * @returns {object|null} 返回书签节点或 null。
+ */
+async function findFileInHome(fileName) {
+    if (!homeDirNode || !homeDirNode.children) {
+        const tree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+        if (tree && tree[0] && tree[0].children && tree[0].children[0]) {
+            homeDirNode = tree[0].children[0];
+        } else {
+            return null;
+        }
+    }
+    return (homeDirNode.children || []).find(child => child.title === fileName && !child.children);
+}
+
 async function loadSettings() {
-  // 1. 异步获取完整的书签树
+  // 1. 获取完整的书签树
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
   root = bookmarkTree[0];
-  current = root; // 默认在根目录
-  path = [root];  // 默认路径
-  const data = await chrome.storage.sync.get(['settings', 'commandHistory', 'bookmarkPath', 'theme', 'background_opacity', 'imgAPI', 'aliases', 'environmentVars', 'privacyPolicyVersion', 'gAuth', 'activeLogin']);
-// 3. 恢复书签路径
+  homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
+  current = homeDirNode;
+  path = [root, homeDirNode];
+
+  // 2. 首先加载配置模式
+  const configData = await new Promise(resolve => chrome.storage.sync.get(['configMode', 'autosyncEnabled'], resolve));
+  configMode = configData.configMode || 'storage'; // 默认为 'storage'
+  autosyncEnabled = configData.autosyncEnabled || false;
+
+  backgroundModeAuto = await getSetting('backgroundModeAuto') ?? true;
+
+  if (configMode === 'storage' || configMode === 'bookmark') {
+    welcomeMsg();
+    setTimeout(() => { // 使用 setTimeout 确保提示信息在欢迎信息之后显示，更显眼
+      print("", "info"); // 添加一个空行以作分隔
+      print("[Notice] A new, more powerful configuration system '.startrc' is available.", "highlight");
+      print(`         You are currently using '${configMode}' mode.`, "info");
+      print("         Run 'config setup startrc' to switch to run control mode.", "hint");
+      print("", "info");
+    }, 100); // 延迟100毫秒显示
+  }
+
+  // 3. 根据配置模式执行不同的加载逻辑
+  if (configMode === 'startrc') {
+    // --- .startrc 模式加载逻辑 ---
+    const rcFile = await findFileInHome('.startrc');
+    if (rcFile && rcFile.url) {
+      try {
+        const scriptContent = decodeURIComponent(rcFile.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent); // <<< 调用新的解析器
+      } catch (e) {
+        print(`Error reading .startrc file: ${e.message}`, 'error');
+      }
+    } else {
+      print("Warning: .startrc file not found. Using default settings.", 'warning');
+      print("Hint: Run 'config setup startrc' to create one.", 'hint');
+    }
+    // 在.startrc模式下，设置一个默认值以防脚本未配置
+    applyTheme(promptTheme || 'default');
+    applyCursorStyle(cursorStyle || 'block');
+
+  } else {
+    // --- 旧模式 (storage/bookmark) 的加载逻辑 ---
+    aliases = await getSetting('aliases') || {};
+    environmentVars = await getSetting('environmentVars') || {};
+    promptTheme = await getSetting('theme') || 'default';
+    const loadedSettings = await getSetting('settings');
+    if (loadedSettings) {
+      default_mode = loadedSettings.default_mode ?? false;
+      // default_search_engine = loadedSettings.default_search_engine ?? "google"; // <<< 已移除
+    }
+    const loadedCursorStyle = await getSetting('cursorStyle');
+    applyCursorStyle(loadedCursorStyle || 'block');
+    applyTheme(promptTheme);
+  }
+
+
+  // 4. Load other non-routable settings directly from storage
+
+  const data = await new Promise(resolve => chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion', 'gAuth', 'activeLogin'], resolve));  
+  
+  if (data.commandHistory) {
+    previousCommands.push(...data.commandHistory);
+  }
+
+  const loadedBgMode = await getSetting('backgroundMode') ?? 'dark';
+  applyBackgroundMode(loadedBgMode);
+  if (!backgroundModeAuto) {
+    applyBackgroundMode(loadedBgMode);
+  }
+
+  // 5. Restore last used bookmark path
   if (data.bookmarkPath) {
     let restoredPathIsValid = true;
     let tempCurrent = root;
     let tempPath = [root];
-
-    // 从根目录开始，根据ID逐级向下查找，重建路径
     for (let i = 1; i < data.bookmarkPath.length; i++) {
       const nextId = data.bookmarkPath[i];
       const nextNode = (tempCurrent.children || []).find(child => child.id === nextId);
-
-      if (nextNode && nextNode.children) { // 确保路径中的节点仍然存在且是文件夹
+      if (nextNode && nextNode.children) {
         tempCurrent = nextNode;
         tempPath.push(nextNode);
       } else {
-        restoredPathIsValid = false; // 如果路径中某个文件夹被删了，则恢复失败
+        restoredPathIsValid = false;
         break;
       }
     }
-
     if (restoredPathIsValid) {
       current = tempCurrent;
       path = tempPath;
     }
   }
 
-  if (data.aliases) {
-    aliases = data.aliases;
-  }
-    
-  if (data.settings) {
-    default_mode = data.settings.default_mode ?? false;
-    // default_search_engine = data.settings.default_search_engine ?? "google";
-  }
-
-  if (data.commandHistory) {
-    previousCommands.push(...data.commandHistory);
-  }
-
-  if (data.environmentVars) {
-    environmentVars = data.environmentVars;
-  }
-
+  // 6. Handle Google Account session
+  // Handle Google Account session
   if (data.activeLogin === 'google' && data.gAuth && data.gAuth.userInfo) {
       user = data.gAuth.userInfo.email || data.gAuth.userInfo.name;
       print(`Welcome back, ${user}`, "success");
   }
-
+  
+  // 7. Handle Privacy Policy check
   if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
-    // 如果隐私政策版本不匹配，显示提示并更新版本
     setTimeout(() => showPrivacyUpdateNotice(), 100);
   }
 
+  // 8. Load and apply background settings
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
+  applyTheme(promptTheme); // Apply theme loaded via getSetting
   
-  if (data.theme) {
-    promptTheme = data.theme;
-  }
-  console.log(data.imgAPI);
-  if (data.imgAPI) {
-    promptBgRandomAPI = data.imgAPI;
-    console.log("Background image API set to:", promptBgRandomAPI);
-  }
+  if (data.imgAPI) promptBgRandomAPI = data.imgAPI;
+  promptOpacity = data.background_opacity || 0.15;
+  
   if (localData.customBackground) {
-    // promptBg = localData.customBackground;
-    promptOpacity = data.background_opacity;
-    applyTheme(data.theme);
-    applyBackground(localData.customBackground, data.background_opacity);
+    applyBackground(localData.customBackground, promptOpacity);
   } else {
-    promptOpacity = data.background_opacity;
-    applyTheme(promptTheme);
     applyBackground(null, promptOpacity); // Apply default background
   }
 
+  syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
 }
 
@@ -2281,6 +3765,7 @@ function clearSuggestions() {
 }
 
 // --- Keyboard Listeners ---
+// --- Keyboard Listeners ---
 document.body.addEventListener("keydown", async e => {
 
   if (isEditing) {
@@ -2288,26 +3773,55 @@ document.body.addEventListener("keydown", async e => {
     if (activeEditor === 'nano') {
         // For nano, we only intercept our specific shortcuts.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-            e.preventDefault();
-            // ★★★ NANO SAVE LOGIC - FIXED ★★★
-            editorStatus.textContent = "Saving...";
-            const updatePayload = {
-                title: editorTitleInput.value,
-                url: editorUrlInput.value
-            };
-            chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
-                if (chrome.runtime.lastError) {
-                    editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
-                } else {
-                    editorStatus.textContent = `Saved: ${updatedNode.title}`;
-                    unsavedChanges = false;
-                    // Silently refresh the current directory's children
-                    chrome.bookmarks.getSubTree(current.id, (results) => {
-                        if (results && results[0]) current = results[0];
-                    });
-                }
-            });
-        } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
+      e.preventDefault();
+      editorStatus.textContent = "Saving...";
+      
+      const isStartrcFile = editingBookmarkTitle === '.startrc';
+      const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
+
+      let updatePayload;
+
+      // --- NANO .startrc 绿灯保存逻辑 ---
+      if (isStartrcFile) {
+        const content = document.getElementById('editor-textarea').value;
+        const dataUrl = `about:blank#${encodeURIComponent(content)}`;
+        updatePayload = { url: dataUrl }; // 只更新URL
+      
+      } else if (isSettingsFile) {
+        const textarea = document.getElementById('editor-textarea');
+        try {
+            const parsedJson = JSON.parse(textarea.value);
+            const stringifiedJson = JSON.stringify(parsedJson);
+            const dataUrl = `about:blank#${encodeURIComponent(stringifiedJson)}`;
+            updatePayload = { url: dataUrl };
+        } catch (err) {
+            editorStatus.textContent = `Error: Invalid JSON! ${err.message}`;
+            return;
+        }
+
+      } else {
+          // --- 原始保存逻辑 ---
+          updatePayload = {
+              title: editorTitleInput.value,
+              url: editorUrlInput.value
+          };
+      }
+
+      chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
+          if (chrome.runtime.lastError) {
+              editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+          } else {
+              editorStatus.textContent = `Saved: ${updatedNode.title}`;
+              unsavedChanges = false;
+              if (updatePayload.title) editorTitleInput.value = updatePayload.title;
+              editingBookmarkId = updatedNode.id;
+              
+              chrome.bookmarks.getSubTree(current.id, (results) => {
+                  if (results && results[0]) current = results[0];
+              });
+          }
+        });
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
             e.preventDefault();
             exitEditor();
         }
@@ -2437,6 +3951,7 @@ document.body.addEventListener("keydown", async e => {
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking();
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -2448,6 +3963,7 @@ document.body.addEventListener("keydown", async e => {
     clearSuggestions(); 
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -2462,23 +3978,131 @@ document.body.addEventListener("keydown", async e => {
   }
 
   if (commanding) { // If a command is running
-    if (control_cmd && e.key.toLowerCase() === "c") {
+    if (e.ctrlKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         interrupt();
-    } else if (e.key !== "Control" && e.key !== "Meta") { // Allow modifier keys
-        // e.preventDefault(); // Optionally prevent other input during command execution
     }
     return; // Most keys ignored during command execution
   }
+  
+  // --- NEW EMACS-STYLE SHORTCUTS ---
+  if (e.ctrlKey && !e.altKey && !e.shiftKey) {
+    // console.log("Key pressed:", e.key);
+      switch (e.key.toLowerCase()) {
+          case 'a': // Move to beginning of line
+              e.preventDefault();
+              cursorPosition = 0;
+              pauseBlinking();
+              updateInputDisplay();
+              return;
+          case 'e': // Move to end of line
+              e.preventDefault();
+              cursorPosition = buffer.length;
+              pauseBlinking();
+              updateInputDisplay();
+              return;
+          case 'u': // Delete from cursor to start of line
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  yankBuffer = buffer.substring(0, cursorPosition);
+                  buffer = buffer.substring(cursorPosition);
+                  pauseBlinking();
+                  cursorPosition = 0;
+                  updateInputDisplay();
+              }
+              return;
+          case 'k': // Delete from cursor to end of line
+              e.preventDefault();
+              yankBuffer = buffer.substring(cursorPosition);
+              buffer = buffer.substring(0, cursorPosition);
+              pauseBlinking();
+              updateInputDisplay();
+              return;
+          case 'w': // Delete word before cursor
+              e.preventDefault();
+              if (cursorPosition > 0) {
+                  const originalCursorPos = cursorPosition;
+                  let endOfWord = cursorPosition;
+                  while (endOfWord > 0 && buffer[endOfWord - 1] === ' ') {
+                      endOfWord--;
+                  }
+                  let startOfWord = endOfWord;
+                  while (startOfWord > 0 && buffer[startOfWord - 1] !== ' ') {
+                      startOfWord--;
+                  }
+                  yankBuffer = buffer.substring(startOfWord, originalCursorPos);
+                  buffer = buffer.substring(0, startOfWord) + buffer.substring(originalCursorPos);
+                  cursorPosition = startOfWord;
+                  updateInputDisplay();
+              }
+              return;
+          case 'y': // Paste (yank)
+              e.preventDefault();
+              if (yankBuffer) {
+                  buffer = buffer.substring(0, cursorPosition) + yankBuffer + buffer.substring(cursorPosition);
+                  cursorPosition += yankBuffer.length;
+                  updateInputDisplay();
+              }
+              return;
 
+          case 'arrowleft':
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  pauseBlinking();
+                  updateInputDisplay();
+              }
+              return;
 
-  if (e.key === "ArrowUp") {
+          case 'arrowright':
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  pauseBlinking();
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+
+  if (e.altKey && !e.ctrlKey) {
+      switch (e.key.toLowerCase()) {
+          case 'b': // Move back one word
+              e.preventDefault();
+              let prevWordPos = cursorPosition;
+              if (prevWordPos > 0) {
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
+                  while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
+                  cursorPosition = prevWordPos;
+                  pauseBlinking();
+                  updateInputDisplay();
+              }
+              return;
+          case 'f': // Move forward one word
+              e.preventDefault();
+              let nextWordPos = cursorPosition;
+              if (nextWordPos < buffer.length) {
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
+                  while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
+                  cursorPosition = nextWordPos;
+                  pauseBlinking();
+                  updateInputDisplay();
+              }
+              return;
+      }
+  }
+  // --- END OF NEW SHORTCUTS ---
+
+  // Arrow keys and their Ctrl equivalents
+  if (e.key === "ArrowUp" || (e.ctrlKey && e.key.toLowerCase() === 'p')) {
     e.preventDefault();
     if (previousCommands.length > 0) {
-      if (previousCommandIndex === 0 && buffer.length > 0) {
-          // If currently typing something new, save it as a draft before navigating history
-          // This behavior can be refined. For now, simple history navigation.
-      }
       previousCommandIndex = Math.max(-previousCommands.length, previousCommandIndex - 1);
       buffer = previousCommands.at(previousCommandIndex) || "";
       cursorPosition = buffer.length;
@@ -2486,62 +4110,50 @@ document.body.addEventListener("keydown", async e => {
     }
     return;
   }
-  if (e.key === "ArrowDown") {
+  if (e.key === "ArrowDown" || (e.ctrlKey && e.key.toLowerCase() === 'n')) {
     e.preventDefault();
     if (previousCommands.length > 0 && previousCommandIndex < 0) {
         previousCommandIndex = Math.min(0, previousCommandIndex + 1);
-        if (previousCommandIndex === 0) {
-            buffer = ""; // Or restore a draft if implemented
-        } else {
-            buffer = previousCommands.at(previousCommandIndex) || "";
-        }
-    } else { // At the "bottom" of history (or no history), clear buffer
+        buffer = (previousCommandIndex === 0) ? "" : (previousCommands.at(previousCommandIndex) || "");
+    } else { 
         buffer = "";
     }
     cursorPosition = buffer.length;
     updateInputDisplay();
     return;
   }
-  if (e.key === "ArrowLeft") {
+  if (e.key === "ArrowLeft" || (e.ctrlKey && e.key.toLowerCase() === 'b')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
+      pauseBlinking();
       updateInputDisplay();
-    } // Allow default if composing for IME navigation
+    }
     return;
   }
-  if (e.key === "ArrowRight") {
+  if (e.key === "ArrowRight" || (e.ctrlKey && e.key.toLowerCase() === 'f')) {
     clearSuggestions(); 
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
+      pauseBlinking();
       updateInputDisplay();
-    } // Allow default if composing
+    }
     return;
   }
 
   // Copy: Ctrl + Shift + C or Cmd + Shift + C
   if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey) && e.shiftKey) {
     e.preventDefault();
-    // Get Selected Text
     const selection = window.getSelection();
-    // remove white spaces after last non-space character and before \n), not only the space of the last line, but every line
     const selectedText = selection.toString()
       .split('\n')
       .map(line => line.replace(/\s+$/, ''))
       .join('\n');
     if (selectedText) {
-      navigator.clipboard.writeText(selectedText).then(() => {
-        // print("Copied to clipboard: " + selectedText, "success");
-      }).catch(err => {
-        // print("Failed to copy: " + err, "error");
-      });
-    } else {
-      // print("Nothing selected to copy.", "warning");
+      navigator.clipboard.writeText(selectedText);
     }
-
-    // Unselect text after copying
     selection.removeAllRanges();
     return;
   }
@@ -2553,8 +4165,8 @@ document.body.addEventListener("keydown", async e => {
         cursorPosition = 0;
         print(`${full_path} ${typedText.textContent}^C`);
         updateInputDisplay();
-    } else { // If buffer is empty, print prompt again (classic ^C behavior)
-        print(full_path); // Just print the prompt
+    } else { 
+        print(full_path);
     }
     return;
   }
@@ -2565,132 +4177,120 @@ document.body.addEventListener("keydown", async e => {
     return;
   }
   
-  if (e.key === "Tab") {
+  // --- FINAL FIX v5: Replace the entire 'if (e.key === "Tab")' block with this ---
+
+if (e.key === "Tab") {
     e.preventDefault();
     clearSuggestions();
 
-    // --- FIX: Define command categories for smarter filtering ---
-    const DIR_ONLY_COMMANDS = ["cd", "rmdir"];
-    // For file-only commands, we add a special "./" type for executable bookmarks
-    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "./", "vim"]; // "./" is a special type for executable bookmarks
-    // Commands not in these lists (like ls, rm, mv, cp) will show both files and directories.
-
     const relevantInput = buffer.substring(0, cursorPosition);
-    const pre_parts = relevantInput.trimStart().split(/\s+/);
-    let commandName = pre_parts[0] || "";
+    const parts = relevantInput.trimStart().split(/\s+/);
+    const commandName = parts[0] || "";
+    const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
 
-    let prefixPath = "";
-    let namePrefixToComplete = "";
-    let currentContextChildren = current.children;
-    let effectiveCommandType = "";
-    let startOfBaseArgumentStringInRelevantInput = 0;
-
-    const allCompletableCommands = [
-        ...DIR_ONLY_COMMANDS, 
-        ...FILE_ONLY_COMMANDS, 
-        "ls", "rm", "mv", "cp", "touch" // Manually add universal commands
-    ];
-
-    if (commandName.startsWith("./")) {
-        effectiveCommandType = "./"; // Use the special type we defined
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf("./") + "./".length;
-    } else if (allCompletableCommands.includes(commandName)) {
-        effectiveCommandType = commandName;
-        startOfBaseArgumentStringInRelevantInput = relevantInput.indexOf(commandName) + commandName.length + 1;
-    } else {
-        return;
-    }
-
-    let baseArgumentString = relevantInput.substring(startOfBaseArgumentStringInRelevantInput);
-    if (!baseArgumentString && relevantInput.endsWith(" ")) {
-        namePrefixToComplete = "";
-        prefixPath = "";
-    } else {
-        const lastSlashPos = baseArgumentString.lastIndexOf('/');
-        if (lastSlashPos > -1) {
-            prefixPath = baseArgumentString.substring(0, lastSlashPos + 1);
-            namePrefixToComplete = baseArgumentString.substring(lastSlashPos + 1);
-        } else {
-            prefixPath = "";
-            namePrefixToComplete = baseArgumentString;
-        }
-    }
-    
-    currentContextChildren = getChildrenAtPath(current, prefixPath.endsWith('/') ? prefixPath.slice(0, -1) : prefixPath);
-    if (!currentContextChildren) currentContextChildren = [];
-
-    let matches = currentContextChildren
-        .filter(child => {
-            const title = child.title || "";
-            if (!title.toLowerCase().startsWith(namePrefixToComplete.toLowerCase())) return false;
-
-            // --- FIX: New, smarter filtering logic based on command type ---
-            const isDirectory = !!child.children;
-
-            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return isDirectory; // Must be a directory
-            }
-            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) {
-                return !isDirectory; // Must be a file
-            }
-
-            // Default case for commands like ls, rm, mv, cp: show everything
-            return true;
-        })
-        .map(child => child.title)
-        .sort();
-    
-    // The rest of the logic for displaying matches remains the same...
-    if (matches.length === 1) {
-        const match = matches[0];
-        const completion = match + " ";
-
-        const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-        const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + completion + buffer.substring(cursorPosition);
-        
-        buffer = newBuffer;
-        cursorPosition = replaceFrom + prefixPath.length + completion.length;
-        updateInputDisplay();
-
-    } else if (matches.length > 1) {
-        let commonPrefix = matches[0];
-        for (let i = 1; i < matches.length; i++) {
-            while (!matches[i].toLowerCase().startsWith(commonPrefix.toLowerCase())) {
-                commonPrefix = commonPrefix.substring(0, commonPrefix.length - 1);
-            }
-        }
-
-        if (commonPrefix.length > namePrefixToComplete.length) {
-            const replaceFrom = startOfBaseArgumentStringInRelevantInput;
-            const newBuffer = buffer.substring(0, replaceFrom) + prefixPath + commonPrefix + buffer.substring(cursorPosition);
+    // --- PRIORITY 1: Sub-command/Argument Completion ---
+    // Check if we are typing arguments for a command that has a suggestion engine.
+    if (!isTypingFirstWord) {
+        const commandDef = commands[commandName];
+        if (commandDef && typeof commandDef === 'object' && commandDef.suggestions) {
+            const currentArgs = parts.slice(1);
             
-            buffer = newBuffer;
-            cursorPosition = replaceFrom + prefixPath.length + commonPrefix.length;
-            updateInputDisplay();
+            const suggestionResult = commandDef.suggestions(currentArgs);
+            if (suggestionResult && suggestionResult.length > 0) {
+                const argToComplete = currentArgs[currentArgs.length - 1] || "";
+                const matches = suggestionResult.filter(s => s.toLowerCase().startsWith(argToComplete.toLowerCase()));
+
+                if (matches.length === 1) {
+                    currentArgs[currentArgs.length - 1] = matches[0];
+                    const newText = commandName + " " + currentArgs.join(" ").trim() + " ";
+                    buffer = newText;
+                    cursorPosition = buffer.length;
+                    updateInputDisplay();
+                } else if (matches.length > 1) {
+                    suggestionsContainer.textContent = matches.join("   ");
+                    suggestionsContainer.style.display = "block";
+                }
+                return; // Sub-command handled, exit.
+            }
+        }
+    }
+
+    // --- PRIORITY 2 & 3: Path or Top-Level Command Completion ---
+    // This section uses the logic from your trusted, working code as a base.
+    const DIR_ONLY_COMMANDS = ["cd", "rmdir", "tree"];
+    const FILE_ONLY_COMMANDS = ["cat", "editlink", "nano", "vim", "./"];
+    const ALL_CONTEXT_COMMANDS = ["ls", "rm", "mv", "cp", "touch", "find"];
+    
+    let effectiveCommandType = "";
+    if (commandName.startsWith('./') || commandName.startsWith('/') || commandName.startsWith('~/')) {
+        effectiveCommandType = "./"; // Treat all path executions as file-consuming
+    } else if ([...DIR_ONLY_COMMANDS, ...FILE_ONLY_COMMANDS, ...ALL_CONTEXT_COMMANDS].includes(commandName)) {
+        effectiveCommandType = commandName;
+    }
+
+    // If we have a context for file completion, run it.
+    if (effectiveCommandType) {
+        let pathPrefix = "";
+        let nameToComplete = "";
+        
+        let pathArgumentString;
+        if (effectiveCommandType === "./") {
+            pathArgumentString = relevantInput.substring(relevantInput.match(/^(.\/|\/|~\/)/)[0].length);
+        } else {
+            const commandEndIndex = relevantInput.indexOf(commandName) + commandName.length;
+            pathArgumentString = relevantInput.substring(commandEndIndex).trimStart();
+        }
+
+        const lastSlashPos = pathArgumentString.lastIndexOf('/');
+        if (lastSlashPos > -1) {
+            pathPrefix = pathArgumentString.substring(0, lastSlashPos + 1);
+            nameToComplete = pathArgumentString.substring(lastSlashPos + 1);
+        } else {
+            pathPrefix = "";
+            nameToComplete = pathArgumentString;
         }
         
-        let outputLineContent = "";
-        matches.forEach(m => {
-             const matchedNode = currentContextChildren.find(c => c.title === m);
-             outputLineContent += (matchedNode && matchedNode.children ? m + "/" : m) + "   ";
-        });
+        let pathResult = findNodeByPath(pathPrefix || ".");
+        if (!pathResult || !pathResult.node || !pathResult.node.children) return;
+        const contextChildren = pathResult.node.children;
         
-        suggestionsContainer.textContent = outputLineContent.trim();
-        suggestionsContainer.style.display = "block";
+        const matches = contextChildren.filter(child => {
+            const title = child.title || "";
+            if (!title.toLowerCase().startsWith(nameToComplete.toLowerCase())) return false;
+            const isDirectory = !!child.children;
+            if (DIR_ONLY_COMMANDS.includes(effectiveCommandType)) return isDirectory;
+            if (FILE_ONLY_COMMANDS.includes(effectiveCommandType)) return !isDirectory;
+            return true;
+        }).map(child => child.title).sort();
+        
+        if (matches.length === 1) {
+            const match = matches[0];
+            const isDir = !!(contextChildren.find(c => c.title === match)?.children);
+            const completion = match + (isDir ? "/" : " ");
+            const textBeforePath = relevantInput.substring(0, relevantInput.length - nameToComplete.length);
+            buffer = textBeforePath + completion + buffer.substring(cursorPosition);
+            cursorPosition = (textBeforePath + completion).length;
+            updateInputDisplay();
+        } else if (matches.length > 1) {
+            suggestionsContainer.textContent = matches.map(m => (contextChildren.find(c => c.title === m)?.children ? m + "/" : m)).join("   ");
+            suggestionsContainer.style.display = "block";
+        }
+
+    } else if (isTypingFirstWord) {
+        // Fallback for first word if it's not a path or a file-op: complete from all commands/aliases
+        const allCommandsAndAliases = [...Object.keys(commands), ...Object.keys(aliases)];
+        const matches = allCommandsAndAliases.filter(c => c.toLowerCase().startsWith(commandName.toLowerCase()));
+
+        if (matches.length === 1) {
+            buffer = matches[0] + " " + buffer.substring(cursorPosition);
+            cursorPosition = matches[0].length + 1;
+            updateInputDisplay();
+        } else if (matches.length > 1) {
+            suggestionsContainer.textContent = matches.join("   ");
+            suggestionsContainer.style.display = "block";
+        }
     }
-    return;
 }
-
-
-  if (control_cmd || e.metaKey || e.altKey) {
-    if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'v') {
-        // Paste handled by event listener
-    } else if ((control_cmd || e.metaKey) && e.key.toLowerCase() === 'c' && window.getSelection().toString().length > 0) {
-        // Allow native copy if text is selected
-    } else {
-       // return; // Let other Ctrl/Meta/Alt shortcuts behave normally or be ignored
-    }
-  }
 
   if (isComposing) return;
 
@@ -2698,19 +4298,16 @@ document.body.addEventListener("keydown", async e => {
     clearSuggestions(); 
     e.preventDefault();
     if (cursorPosition > 0) {
-      const charToDelete = buffer.substring(cursorPosition -1, cursorPosition);
-      // Basic backspace, could be enhanced for ^H like behavior if needed
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking();
       updateInputDisplay();
     }
-  } else // in script.js, REPLACE the 'if (e.key === "Enter")' block in the keydown listener with this final version.
-
-if (e.key === "Enter") {
+  } else if (e.key === "Enter") {
     clearSuggestions();
     e.preventDefault();
-    if (commanding) return; // Don't process new commands if one is already running
+    if (commanding) return;
 
     const commandToProcess = buffer.trim();
     if (buffer.length > 0 && (!previousCommands.length || buffer !== previousCommands.at(-1))) {
@@ -2724,9 +4321,10 @@ if (e.key === "Enter") {
     updateInputDisplay();
 
     executeLine(commandToProcess);
-} else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -2990,11 +4588,19 @@ function redrawAllLinesOnResize() {
 window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
 window.onload = async () => {
+
+  terminal.addEventListener('dragstart', (e) => {
+    // 1. 阻止浏览器默认的拖拽行为
+    e.preventDefault();
+    // 2. 立刻清空当前的文字选择
+    // window.getSelection().removeAllRanges();
+  });
+
   // No explicit body focus, let browser decide or user click.
   // typedText.focus() will be called by done() or click handler.
   updateCharacterWidth(); // Initial calculation
   await loadSettings(); // Load settings and user info
-  welcomeMsg();
+  // welcomeMsg();
   // updateInputDisplay(); // Called by done()
   done(); // Initial setup of prompt and input display
 };
@@ -3015,12 +4621,10 @@ function welcomeMsg() {
     print("Author: Tian Yi, Bao");
     print("");
     print("Type 'help' for a list of commands.");
+    print("Type 'about' for more information about start-terminal.");
     print("");
-    // print("Search By Default:");
-    // print(`  - Current: ${default_search_engine}`, "highlight");
-    print(`Search by default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
-    // print("  - Supported: google, bing, baidu");
-    // print("  - Change with: default <search engine|on|off>", "hint");
+    print("Default Search Behavior:", "highlight");
+    print(`  - Default Mode: ${default_mode ? 'ON' : 'OFF'}`, `${default_mode ? "success" : "warning"}`);
     print("");
 }
 
@@ -3041,15 +4645,37 @@ document.body.addEventListener("click", function(event) {
 function applyTheme(themeName) {
     document.body.className = `theme-${themeName}`;
     promptTheme = themeName;
+
+    if (backgroundModeAuto) {
+        const newMode = THEME_MODES[themeName] || 'dark';
+        applyBackgroundMode(newMode);
+    }
+
+    applyCursorStyle(cursorStyle); // Reapply cursor style to ensure it matches the theme
     saveTheme();
 }
 
+function applyBackgroundMode(mode) {
+    if (mode !== 'light' && mode !== 'dark') return;
+    document.body.classList.remove('light-mode', 'dark-mode');
+    document.body.classList.add(`${mode}-mode`);
+    backgroundMode = mode;
+}
+
+function applyCursorStyle(style) {
+    document.body.classList.remove('cursor-style-block', 'cursor-style-bar', 'cursor-style-underline');
+    document.body.classList.add(`cursor-style-${style}`);
+    cursorStyle = style;
+}
+
 function saveTheme() {
-  chrome.storage.sync.set({ theme: promptTheme });
+  // chrome.storage.sync.set({ theme: promptTheme });
+  setSetting('theme', promptTheme);
 }
 
 function saveEnvironmentVars() {
-  chrome.storage.sync.set({ environmentVars: environmentVars });
+  // chrome.storage.sync.set({ environmentVars: environmentVars });
+  setSetting('environmentVars', environmentVars);
 }
 
 function applyBackground(imageDataUrl, opacity) {
@@ -3117,8 +4743,8 @@ function checkForUpdates() {
 }
 
 async function applyUpdates() {
-  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y|n] ");
-  print(`Extension needs to be reloaded to update, reload now? [Y|n] ${user_input_content}`)
+  let result = await userInputMode("Extension needs to be reloaded to update, reload now? [Y/n] ");
+  print(`Extension needs to be reloaded to update, reload now? [Y/n] ${user_input_content}`)
   if (result) {
     chrome.runtime.onUpdateAvailable.addListener((details) => {
       print(`Fetched: ${details.version}`, 'info');
@@ -3129,6 +4755,7 @@ async function applyUpdates() {
   }
   done();
   commanding = false;
+
 }
 
 function userInputMode(query) {
