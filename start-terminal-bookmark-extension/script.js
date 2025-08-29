@@ -4357,6 +4357,7 @@ document.body.addEventListener("keydown", async e => {
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
                   cursorPosition = prevWordPos;
+                  pauseBlinking();
                   updateInputDisplay();
               }
               return;
@@ -4368,6 +4369,7 @@ document.body.addEventListener("keydown", async e => {
                   while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
                   while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
                   cursorPosition = nextWordPos;
+                  pauseBlinking();
                   updateInputDisplay();
               }
               return;
