@@ -5,7 +5,7 @@
  */
 (function() {
     if (!window.TerminalAPI) {
-        console.error("TerminalAPI not found. Plugin 'goto' cannot be loaded.");
+        console.error("TerminalAPI not found. Plugin 'to' cannot be loaded.");
         return;
     }
     const shortcuts = {
