@@ -1,6 +1,10 @@
 {
-  "git_aliases": {
+  "helloworld": {
     "version": "1.0.0",
-    "description": "Adds common Git command aliases like 'ga', 'gc', 'gp'."
+    "description": "Print Hello World"
+  },
+  "to": {
+    "version": "1.0.0",
+    "description": "A better goto"
   }
 }
