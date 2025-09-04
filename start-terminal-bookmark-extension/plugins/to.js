@@ -1,5 +1,5 @@
 /**
- * goto - A powerful shortcut manager for websites and site-specific searches.
+ * to - A powerful shortcut manager for websites and site-specific searches.
  * This plugin demonstrates argument handling, conditional logic, and returning
  * command strings for the main terminal to execute.
  */
