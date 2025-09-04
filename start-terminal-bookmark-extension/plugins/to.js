@@ -4,10 +4,6 @@
  * command strings for the main terminal to execute.
  */
 (function() {
-    if (!window.TerminalAPI) {
-        console.error("TerminalAPI not found. Plugin 'to' cannot be loaded.");
-        return;
-    }
     const shortcuts = {
         'gh': {
             'url': 'https://github.com/search?q=%s',
