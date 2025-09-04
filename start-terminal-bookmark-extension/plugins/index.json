@@ -6,5 +6,9 @@
   "helloworld": {
     "version": "1.0.0",
     "description": "Print Hello World"
+  },
+  "to": {
+    "version": "1.0.0",
+    "description": "A better goto"
   }
 }
