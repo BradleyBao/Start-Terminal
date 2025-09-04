@@ -23,6 +23,15 @@
     "https://login.microsoftonline.com/*",
     "https://graph.microsoft.com/*"
   ],
+  "sandbox": {
+    "pages": ["sandbox.html"]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["sandbox.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_icon": "icons/icon128.png"
   }

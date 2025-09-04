@@ -108,6 +108,9 @@ const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
 
 const PLUGIN_REPO_URL = "https://raw.githubusercontent.com/BradleyBao/Start-Terminal/main/start-terminal-bookmark-extension/plugins/";
 
+let sandboxFrame;
+const pluginCommandNames = new Set();
+
 const TerminalAPI = {
     _pluginCommands: {},
 
@@ -1870,27 +1873,16 @@ DESCRIPTION
                 }
 
                 print(`Fetching plugin '${pluginName}'...`);
-                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.json?t=${Date.now()}`); // <<< 修正行
+                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
                 if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
-                const pluginConfig = await response.json(); // <<< 将 .text() 改为 .json()
-
+                const code = await response.text();
+                
                 const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-
-                // 存储整个JSON对象，而不是代码字符串
                 installed_plugins[pluginName] = {
                     version: plugin_cache[pluginName].version,
                     description: plugin_cache[pluginName].description,
-                    config: pluginConfig // <<< 将 code 改为 config
+                    code: code
                 };
-                // if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
-                // const code = await response.text();
-                
-                // const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-                // installed_plugins[pluginName] = {
-                //     version: plugin_cache[pluginName].version,
-                //     description: plugin_cache[pluginName].description,
-                //     code: code
-                // };
 
                 await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
                 print(`Plugin '${pluginName}' installed successfully.`, "success");
@@ -3308,9 +3300,14 @@ async function executePipeline(pipelineStr) {
 
         const { command, args, options } = parsed;
         const commandDef = commands[command];
-        const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
 
-        if (action) {
+        // console.log(`[Main] Executing: '${command}'. Is it a known plugin command?`, pluginCommandNames.has(command));
+        
+
+        if (commandDef) {
+          const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
+
+          if (action) {
 
             let result;
             if (!isLastInPipe) {
@@ -3364,6 +3361,43 @@ async function executePipeline(pipelineStr) {
             }
             previousOutput = null;
         }
+
+        } else if (pluginCommandNames.has(command)) {
+            // 将执行请求委托给沙箱
+            sandboxFrame.contentWindow.postMessage({
+                type: 'run_plugin_command',
+                name: command,
+                args: args
+            }, '*');
+            previousOutput = null; // 插件是异步的，不直接参与管道传递
+        } 
+        // --------------------------------------------------------------------
+        // 分支 C：未知命令 / 默认搜索
+        // --------------------------------------------------------------------
+        else {
+            if (isLastInPipe) {
+                if (default_mode) {
+                    const query = finalCommand;
+
+                    // == 如果是 Edge 版本, 使用这段逻辑 ==
+                    // const defaultAction = commands[default_search_engine];
+                    // if (defaultAction) {
+                    //     saveSearchHistory(query);
+                    //     defaultAction([query], options);
+                    // }
+
+                    // == 如果是 Chrome 版本, 使用这段逻辑 (更推荐) ==
+                    saveSearchHistory(query);
+                    chrome.search.query({ text: query, disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" });
+                    
+                } else {
+                    print(`Unknown command: '${command}' (try 'help')`, "error");
+                }
+            }
+            previousOutput = null; // 未知命令，中断管道
+        }
+
+        
     }
     activeGrepPattern = null; // Reset grep pattern after processing the pipeline
 }
@@ -4042,6 +4076,25 @@ async function findFileInHome(fileName) {
     return (homeDirNode.children || []).find(child => child.title === fileName && !child.children);
 }
 
+async function loadAndInitPlugins() {
+    // console.log("[Main] Starting to load plugins...");
+    const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+    for (const name in installed_plugins) {
+        const plugin = installed_plugins[name];
+        if (plugin.code) {
+            // console.log(`[Main] Sending plugin code for '${name}' to sandbox.`);
+            // 将插件代码发送到沙箱去执行
+            sandboxFrame.contentWindow.postMessage({
+                type: 'load_plugin',
+                name: name,
+                code: plugin.code
+            }, '*');
+        }
+    }
+}
+
+
 async function loadSettings() {
   // 1. 获取完整的书签树
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
@@ -4169,56 +4222,7 @@ async function loadSettings() {
   }
 
   // Plugins
-  const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-const pluginCommands = {};
-
-for (const name in installed_plugins) {
-    try {
-        const plugin = installed_plugins[name];
-        if (!plugin.config || !plugin.config.commands) continue;
-
-        const config = plugin.config;
-
-        // 打印加载消息
-        if (config.onLoadMessage) {
-            print(config.onLoadMessage.text, config.onLoadMessage.type || 'success');
-        }
-
-        // 解释并生成命令
-        for (const cmdName in config.commands) {
-            const cmdConfig = config.commands[cmdName];
-            let execFunc;
-
-            switch (cmdConfig.type) {
-                case 'alias':
-                    execFunc = () => cmdConfig.exec;
-                    break;
-                case 'alias_with_args':
-                    execFunc = (args) => {
-                        const argString = args.join(' ');
-                        // 将 $* 替换为参数，并处理引号
-                        return cmdConfig.exec.replace('"$*"', `"${argString.replace(/"/g, '\\"')}"`)
-                                             .replace('$*', argString);
-                    };
-                    break;
-                default:
-                    console.warn(`Unknown plugin command type: ${cmdConfig.type} for ${cmdName}`);
-                    continue; // 跳过不支持的类型
-            }
-            
-            pluginCommands[cmdName] = {
-                exec: execFunc,
-                manual: cmdConfig.manual || `No manual entry for plugin command '${cmdName}'.`,
-                isPlugin: true
-            };
-        }
-    } catch (e) {
-        print(`Error loading plugin '${name}': ${e.message}`, 'error');
-    }
-}
-
-// 将插件生成的命令合并到主 commands 对象中
-Object.assign(commands, pluginCommands);
+  await loadAndInitPlugins();
 
   syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
@@ -4764,7 +4768,12 @@ if (e.key === "Tab") {
 
     } else if (isTypingFirstWord) {
         // Fallback for first word if it's not a path or a file-op: complete from all commands/aliases
-        const allCommandsAndAliases = [...Object.keys(commands), ...Object.keys(aliases)];
+        // const allCommandsAndAliases = [...Object.keys(commands), ...Object.keys(aliases)];
+        const allCommandsAndAliases = [
+            ...Object.keys(commands),
+            ...Object.keys(aliases),
+            ...pluginCommandNames // 将Set中的插件命令展开并加入列表
+        ];
         const matches = allCommandsAndAliases.filter(c => c.toLowerCase().startsWith(commandName.toLowerCase()));
 
         if (matches.length === 1) {
@@ -4772,7 +4781,8 @@ if (e.key === "Tab") {
             cursorPosition = matches[0].length + 1;
             updateInputDisplay();
         } else if (matches.length > 1) {
-            suggestionsContainer.textContent = matches.join("   ");
+            const uniqueMatches = [...new Set(matches)];
+            suggestionsContainer.textContent = uniqueMatches.join("   ");
             suggestionsContainer.style.display = "block";
         }
     }
@@ -5073,23 +5083,52 @@ function redrawAllLinesOnResize() {
 // Attach the new, intelligent redraw function to the window's resize event.
 window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
-window.onload = async () => {
+// script.js
 
-  terminal.addEventListener('dragstart', (e) => {
-    // 1. 阻止浏览器默认的拖拽行为
-    e.preventDefault();
-    // 2. 立刻清空当前的文字选择
-    // window.getSelection().removeAllRanges();
-  });
+// window.onload = () => {
+//   // 定义所有初始化逻辑在一个函数中
+//   const initializeApp = async () => {
+//     await loadSettings(); 
+//     done(); 
+//   };
 
-  // No explicit body focus, let browser decide or user click.
-  // typedText.focus() will be called by done() or click handler.
-  updateCharacterWidth(); // Initial calculation
-  await loadSettings(); // Load settings and user info
-  // welcomeMsg();
-  // updateInputDisplay(); // Called by done()
-  done(); // Initial setup of prompt and input display
-};
+//   // ★★★ 最终修正的消息监听器 ★★★
+//   window.addEventListener('message', (event) => {
+//     // 这是唯一需要的安全检查。
+//     // 它验证发送消息的窗口是否就是我们创建的那个沙箱iframe的窗口。
+//     // 这比检查 origin 更精确、更可靠。
+//     if (!sandboxFrame || event.source !== sandboxFrame.contentWindow) {
+//         return;
+//     }
+
+//     // 由于安全检查已通过，我们可以信任并处理数据
+//     const { type, name, commandString, text } = event.data;
+//     switch (type) {
+//       case 'print':
+//         print(text, event.data.type, event.data.allowHtml);
+//         break;
+//       case 'plugin_command_registered':
+//         pluginCommandNames.add(name);
+//         break;
+//       case 'execute_command':
+//         executePipeline(commandString);
+//         break;
+//     }
+//   });
+
+//   // 动态创建沙箱 iframe
+//   sandboxFrame = document.createElement('iframe');
+//   sandboxFrame.id = 'sandbox-frame';
+//   sandboxFrame.src = 'sandbox.html';
+//   sandboxFrame.style.display = 'none';
+//   sandboxFrame.onload = initializeApp;
+//   document.body.appendChild(sandboxFrame);
+
+//   // 设置其他全局监听器
+//   terminal.addEventListener('dragstart', (e) => e.preventDefault());
+//   window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
+//   updateCharacterWidth();
+// };
 
 function detectBrowser() {
     var userAgent = navigator.userAgent;
@@ -5184,7 +5223,7 @@ function applyBackground(imageDataUrl, opacity) {
 
 function handleFileSelect(event) {
     const file = event.target.files[0];
-    console.log(file);
+    // console.log(file);
     if (file && file.type.startsWith('image/')) {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -5215,7 +5254,7 @@ function checkForUpdates() {
         // The update will be downloaded. The onUpdateAvailable listener will handle the next step.
       } else if (status === "no_update") {
         print(`Hit: ${details.version} found`, "info")
-        console.log("No new update found."); //不在终端显示，保持整洁
+        // console.log("No new update found."); //不在终端显示，保持整洁
       } else if (status === "throttled") {
         print("Update check is throttled. Please try again later.", "warning");
       }
@@ -5378,3 +5417,58 @@ if (typeof exports !== "undefined") {
 } else {
     window.Ping = Ping;
 }
+
+async function main() {
+    // console.log("[Main] Page loaded. Starting main initialization function.");
+
+    // 1. 立即设置消息监听器
+    // 这是与沙箱相关的最先做的事情，确保万无一失。
+    window.addEventListener('message', (event) => {
+        // 安全检查：验证消息是否来自我们创建的那个特定的沙箱iframe。
+        if (!sandboxFrame || event.source !== sandboxFrame.contentWindow) {
+            return;
+        }
+
+        // console.log("[Main] SUCCESS: Received a message from the sandbox:", event.data);
+
+        const { type, name, commandString, text, style, allowHtml } = event.data;
+        switch (type) {
+          case 'print':
+            print(text, style, allowHtml);
+            break;
+          case 'plugin_command_registered':
+            pluginCommandNames.add(name);
+            // console.log(`[Main] Command '${name}' has been registered.`, pluginCommandNames);
+            break;
+          case 'execute_command':
+            executePipeline(commandString);
+            break;
+        }
+    });
+    // console.log("[Main] Message listener has been attached to window.");
+
+    // 2. 定义在沙箱加载后才执行的初始化逻辑
+    const initializeApp = async () => {
+        // console.log("[Main] Sandbox iframe has loaded. Running initializeApp().");
+        await loadSettings();
+        done();
+    };
+
+    // 3. 动态创建并附加沙箱 iframe
+    sandboxFrame = document.createElement('iframe');
+    sandboxFrame.id = 'sandbox-frame';
+    sandboxFrame.src = 'sandbox.html';
+    sandboxFrame.style.display = 'none';
+    sandboxFrame.onload = initializeApp; // 将初始化逻辑绑定到 iframe 的 load 事件
+    document.body.appendChild(sandboxFrame);
+    // console.log("[Main] Sandbox iframe has been created and appended to the body.");
+
+    // 4. 设置其他非依赖的监听器和初始状态
+    terminal.addEventListener('dragstart', (e) => e.preventDefault());
+    window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
+    updateCharacterWidth();
+}
+
+// 使用 addEventListener 启动主函数
+// 这比 .onload 更健壮，因为它不会被其他脚本覆盖。
+window.addEventListener('load', main);
