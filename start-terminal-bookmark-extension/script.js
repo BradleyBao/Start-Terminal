@@ -106,6 +106,32 @@ const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
 const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
 const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
 
+const PLUGIN_REPO_URL = "https://raw.githubusercontent.com/BradleyBao/Start-Terminal/main/start-terminal-bookmark-extension/plugins/";
+
+const TerminalAPI = {
+    _pluginCommands: {},
+
+    registerCommand: function(name, config) {
+        if (typeof name !== 'string' || !name || typeof config.exec !== 'function') {
+            console.error(`[Plugin Error] Invalid registration for command '${name}'.`);
+            return;
+        }
+        // 我们在这里只存储配置，实际执行交给核心的 executePipeline
+        this._pluginCommands[name] = {
+            exec: config.exec,
+            manual: config.manual || `No manual entry for plugin command '${name}'.`,
+            isPlugin: true // 标记为插件命令
+        };
+    },
+    print: (text, type = 'info', allowHtml = false) => {
+        print(text, type, allowHtml);
+    },
+    getEnv: (key) => {
+        return environmentVars[key] || null;
+    }
+};
+window.TerminalAPI = TerminalAPI;
+
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
 // });
@@ -1802,36 +1828,119 @@ DESCRIPTION
   mslogout: () => {
     logoutWithMicrosoft();
   },
-  apt: (args) => {
-    if (args.length === 0) {
-      return;
+  apt: async (args) => {
+    const action = args.shift() || 'list';
+
+    switch (action) {
+        case 'update':
+            awaiting();
+            print("Updating package list from repository...");
+            try {
+                const response = await fetch(`${PLUGIN_REPO_URL}index.json?t=${Date.now()}`); // 添加时间戳防止缓存
+                if (!response.ok) throw new Error(`Failed to fetch index (status: ${response.status})`);
+                const repoIndex = await response.json();
+                
+                // 将仓库索引缓存到本地存储
+                await new Promise(resolve => chrome.storage.local.set({ plugin_cache: repoIndex }, resolve));
+                
+                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+                
+                print("Package index updated successfully.", "success");
+                print("Available packages:", "highlight");
+                for (const name in repoIndex) {
+                    const status = installed_plugins[name] ? '(installed)' : '(available)';
+                    const indicator = installed_plugins[name] ? 'Hit:' : 'Get:';
+                    print(`  ${indicator} ${name} ${status}`, installed_plugins[name] ? 'info' : 'success');
+                }
+            } catch (e) {
+                print(`Error updating package list: ${e.message}`, "error");
+            }
+            done();
+            return;
+
+        case 'install': {
+            const pluginName = args[0];
+            if (!pluginName) return "Usage: apt install <plugin_name>";
+            
+            awaiting();
+            try {
+                const { plugin_cache } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+                if (!plugin_cache || !plugin_cache[pluginName]) {
+                    throw new Error("Package not found in cache. Please run 'apt update' first.");
+                }
+
+                print(`Fetching plugin '${pluginName}'...`);
+                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
+                if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
+                const code = await response.text();
+                
+                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+                installed_plugins[pluginName] = {
+                    version: plugin_cache[pluginName].version,
+                    description: plugin_cache[pluginName].description,
+                    code: code
+                };
+
+                await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+                print(`Plugin '${pluginName}' installed successfully.`, "success");
+                print("Please restart the terminal (reload the page) to activate the new commands.", "warning");
+
+            } catch (e) {
+                print(`Error installing '${pluginName}': ${e.message}`, "error");
+            }
+            done();
+            return;
+        }
+
+        case 'purge':
+        case 'remove': {
+            const pluginName = args[0];
+            if (!pluginName) return `Usage: apt ${action} <plugin_name>`;
+
+            awaiting();
+            const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+            if (!installed_plugins[pluginName]) {
+                print(`Plugin '${pluginName}' is not installed.`, "warning");
+            } else {
+                delete installed_plugins[pluginName];
+                await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+                print(`Plugin '${pluginName}' has been purged.`, "success");
+                print("Please restart the terminal (reload the page) to apply changes.", "warning");
+            }
+            done();
+            return;
+        }
+
+        case 'list': {
+            awaiting();
+            const { plugin_cache } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+            const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+            if (!plugin_cache) {
+                print("Package cache is empty. Please run 'apt update'.", "warning");
+                done();
+                return;
+            }
+
+            print("Available Packages from Repository:", "highlight");
+            for (const name in plugin_cache) {
+                const plugin = plugin_cache[name];
+                let status = '[available]';
+                if (installed_plugins[name]) {
+                    status = `[installed v${installed_plugins[name].version}]`;
+                }
+                print(`  ${name.padEnd(20, ' ')} ${status} - ${plugin.description}`);
+            }
+            done();
+            return;
+        }
+
+        default:
+            return "Usage: apt <update|install|purge|list> [plugin_name]";
     }
-    let arg = args[0];
-    if (arg == "update") {
-      awaiting();
-      commanding = true;
-      checkForUpdates();
-    } else if (arg == "upgrade") {
-      awaiting();
-      commanding = true;
-      applyUpdates();
-    }
-  },
-  "apt-get": (args) => {
-    if (args.length === 0) {
-      return;
-    }
-    let arg = args[0];
-    if (arg == "update") {
-      awaiting();
-      commanding = true;
-      checkForUpdates();
-    } else if (arg == "upgrade") {
-      awaiting();
-      commanding = true;
-      applyUpdates();
-    }
-  },
+},
+// 你可以保留 apt-get 作为 apt 的别名
+'apt-get': (args) => commands.apt(args),
   history: {
     exec: () => {
         if (previousCommands.length === 0) return ["No history yet."];
@@ -3200,6 +3309,15 @@ async function executePipeline(pipelineStr) {
             }
 
             result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
+
+            if (commandDef && commandDef.isPlugin && typeof result === 'string') {
+                print(`> ${result}`, "hint"); // 显示插件别名展开后的命令
+                // 将插件返回的字符串作为新命令再次执行
+                // 注意：这里是一个递归调用思想的简化版，只处理一层别名
+                await executePipeline(result); 
+                result = null; // 清空结果，因为我们已经执行了新命令
+            }
+
             previousOutput = result;
 
             if (isPiping) {
@@ -4038,6 +4156,24 @@ async function loadSettings() {
   } else {
     applyBackground(null, promptOpacity); // Apply default background
   }
+
+  // Plugins
+  const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+    for (const name in installed_plugins) {
+        try {
+            const plugin = installed_plugins[name];
+            // 使用 new Function 在沙箱化的全局作用域中执行插件代码
+            const runPlugin = new Function(plugin.code);
+            runPlugin();
+        } catch (e) {
+            print(`Error loading plugin '${name}': ${e.message}`, 'error');
+        }
+    }
+    
+    // 将插件注册的命令合并到主 commands 对象中
+    // 这会覆盖任何同名的内置命令，允许插件进行扩展
+    Object.assign(commands, TerminalAPI._pluginCommands);
 
   syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);

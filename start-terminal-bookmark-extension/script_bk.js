@@ -14,6 +14,10 @@ const supported_search_engine = ["google", "bing", "baidu"];
 const backgroundContainer = document.getElementById("background-container");
 const bgUploadInput = document.getElementById("bg-upload-input");
 
+// cursor 
+let isBlinkingPaused = false;
+let blinkTimeout = 1000
+
 let control_cmd = false;
 let commanding = false;
 let input_mode = false;
@@ -32,10 +36,32 @@ let yankBuffer = ""; // Stores text for Ctrl+y pasting (yank)
 let configMode = "storage"; // Storage or Bookmarks, storage by default
 let autosyncEnabled = false; // Control if two backends should be synced
 const SETTINGS_FOLDER_NAME = '.settings';
-const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle'];
+const CONFIG_KEYS = ['aliases', 'environmentVars', 'theme', 'settings', 'cursorStyle', 'syntaxHighlighting', 'backgroundMode', 'backgroundModeAuto'];
 
 // Cursor style
 let cursorStyle = 'block'; // To track the current cursor style
+
+const SUPPORTED_THEMES = [
+    'default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian',
+    'dos', 'solarized-dark', 'solarized-light', 'monokai', 'dracula',
+    'gruvbox-dark', 'nord', 'matrix', 'one-dark', 'red-sands',
+    'github-dark', 'github-light', 'material-dark', 'material-light',
+    'ayu-dark', 'ayu-light', 'cyberpunk', 'amber-crt', 'ocean', 'tango-dark'
+];
+
+let backgroundMode = 'dark';
+let backgroundModeAuto = true;
+
+const THEME_MODES = {
+  'default': 'dark', 'ubuntu': 'dark', 'powershell': 'dark', 'cmd': 'dark', 'kali': 'dark', 'debian': 'dark',
+  'dos': 'dark', 'solarized-dark': 'dark', 'monokai': 'dark', 'dracula': 'dark',
+  'gruvbox-dark': 'dark', 'nord': 'dark', 'matrix': 'dark', 'one-dark': 'dark', 'red-sands': 'dark',
+  'github-dark': 'dark', 'material-dark': 'dark', 'ayu-dark': 'dark', 'cyberpunk': 'dark', 'amber-crt': 'dark', 'ocean': 'dark', 'tango-dark': 'dark',
+  'solarized-light': 'light', 'github-light': 'light', 'material-light': 'light', 'ayu-light': 'light'
+};
+
+// Syntax 
+let syntaxHighlightingEnabled = false; // default is false
 
 let activeGrepPattern = null;
 
@@ -78,6 +104,7 @@ const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
 const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
 const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
 const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
+const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
@@ -107,37 +134,61 @@ function get_fav(bookmarks) {
   update_user_path();
 };
 
+// function update_user_path() {
+//   let displayPath;
+
+//   // This first part, for handling paths inside the home directory, is correct.
+//   if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
+//     if (path.length === 2) {
+//       displayPath = "~";
+//     } else {
+//       displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
+//     }
+//   } else {
+//     // For all other paths, build them from the root '/'
+//     // We slice from 1 to ignore the main root node, which has no title.
+//     const pathString = path.slice(1).map(p => p.title).join("/");
+//     displayPath = "/" + pathString;
+//   }
+
+//   // The rest of the function remains the same.
+//   full_path = user;
+//   if (user !== "") {
+//     full_path += ": ";
+//   }
+//   full_path += displayPath;
+//   full_path +=  " $";
+//   promptSymbol.textContent = full_path;
+// }
+
+// script.js
+
 function update_user_path() {
   let displayPath;
 
-  // This first part, for handling paths inside the home directory, is correct.
   if (path.length >= 2 && path[0] === root && path[1] === homeDirNode) {
-    if (path.length === 2) {
-      displayPath = "~";
-    } else {
-      displayPath = "~/" + path.slice(2).map(p => p.title).join("/");
-    }
+    displayPath = path.length === 2 ? "~" : "~/" + path.slice(2).map(p => p.title).join("/");
   } else {
-    // --- THIS IS THE FIX ---
-    // For all other paths, build them from the root '/'
-    // We slice from 1 to ignore the main root node, which has no title.
     const pathString = path.slice(1).map(p => p.title).join("/");
     displayPath = "/" + pathString;
   }
 
-  // The rest of the function remains the same.
-  full_path = user;
-  if (user !== "") {
-    full_path += ": ";
-  }
-  full_path += displayPath;
-  full_path +=  " $";
-  promptSymbol.textContent = full_path;
+  // --- 新增：为提示符构建带样式的 HTML ---
+  const userText = user ? user + ":" : "";
+  const pathText = displayPath;
+  const charText = " $";
+
+  // 保留纯文本版本，用于复制粘贴和历史记录
+  full_path = userText + pathText + charText;
+
+  // 构建用于显示的HTML
+  const userHtml = user ? `<span class="prompt-user">${escapeHtml(userText)}</span>` : '';
+  const pathHtml = `<span class="prompt-path">${escapeHtml(pathText)}</span>`;
+  const charHtml = `<span class="prompt-char">${escapeHtml(charText)}</span>`;
+
+  promptSymbol.innerHTML = userHtml + pathHtml + charHtml;
 }
 
-// =================================================================
-// 授权码流程 (Authorization Code Flow with PKCE) 的完整代码
-// =================================================================
 async function loginWithMicrosoft() {
     const MS_CLIENT_ID = 'b4f5f8f9-d040-45a8-8b78-b7dd23524b92'; // ⚠️ Client ID for Microsoft OAuth 2.0
 
@@ -434,33 +485,235 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
+/**
+ * Finds URLs in a string and wraps them in <a> tags.
+ * @param {string} text - The text to process.
+ * @returns {{html: string, linksFound: boolean}} An object containing the new HTML string and a flag indicating if links were found.
+ */
+function linkify(text) {
+    // A robust regex to find URLs (http, https, www)
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let linksFound = false;
+
+    // Use .replace() to find all URLs and wrap them in an <a> tag
+    const html = text.replace(urlRegex, (url) => {
+        linksFound = true;
+        let href = url;
+        // If the URL starts with 'www.', prepend 'http://' for the href attribute to make it a valid link
+        if (href.startsWith('www.')) {
+            href = 'http://' + href;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="terminal-link">${url}</a>`;
+    });
+
+    return { html, linksFound };
+}
+
+// function updateInputDisplaySimple() {
+//   if (isComposing) {
+//     blockCursor.style.display = "none";
+//     return;
+//   }
+
+//   const currentActiveElement = document.activeElement;
+//   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+
+//   if (cursorPosition === buffer.length) {
+//     typedText.textContent = buffer;
+//     blockCursor.style.display = "inline-block";
+//   } else {
+//     const charAtCursor = buffer[cursorPosition] || ' ';
+//     typedText.innerHTML =
+//       escapeHtml(buffer.substring(0, cursorPosition)) +
+//       `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
+//       escapeHtml(buffer.substring(cursorPosition + 1));
+//     blockCursor.style.display = "none";
+//   }
+
+//   // After updating display, ensure the browser's caret/selection is also at cursorPosition
+//   // This helps with IME positioning consistency.
+//   // Only set caret if typedText was focused or body (implying typedText should be focused)
+//   if (typedTextIsFocused || currentActiveElement === document.body ) {
+//       setCaretAtOffset(typedText, cursorPosition);
+//   }
+// }
+
+function updateInputDisplay () {
+  // if (syntaxHighlightingEnabled) {
+  //   updateInputDisplayWithHighlight();
+  // } else {
+  //   updateInputDisplaySimple();
+  // }
+  updateInputDisplayWithHighlight();
+}
+
 // Function to update the input display (typedText and blockCursor)
-function updateInputDisplay() {
+// function updateInputDisplayWithHighlight() {
+//   if (isComposing) {
+//     blockCursor.style.display = "none";
+//     return;
+//   }
+
+//   let html = '';
+//   let bufferIndex = 0;
+
+//   // 内部辅助函数，用于处理一小块文本，并正确插入光标下的高亮字符
+//   const processChunk = (text, className = '') => {
+//     let chunkHtml = '';
+//     for (const char of text) {
+//       if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
+//         // 如果当前字符索引等于光标位置，则用高亮span包裹
+//         chunkHtml += `<span class="highlighted-char">${escapeHtml(char)}</span>`;
+//       } else {
+//         chunkHtml += escapeHtml(char);
+//       }
+//       bufferIndex++;
+//     }
+//     // 如果有CSS类名，用相应的span包裹整个块
+//     if (className) {
+//       return `<span class="${className}">${chunkHtml}</span>`;
+//     }
+//     return chunkHtml;
+//   };
+
+//   // 1. 首先处理注释：#号及其之后的所有内容
+//   const commentIndex = buffer.indexOf('#');
+//   let commandPart = buffer;
+//   let commentPart = '';
+
+//   if (commentIndex !== -1) {
+//     commandPart = buffer.substring(0, commentIndex);
+//     commentPart = buffer.substring(commentIndex);
+//   }
+
+//   // 2. 将命令部分分解成令牌（单词和空格）并处理
+//   const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+//   let commandFound = false;
+
+//   for (const token of tokens) {
+//     if (/^\s+$/.test(token)) { // 如果是空格
+//       html += processChunk(token);
+//     } else { // 如果是单词
+//       if (!commandFound) {
+//         // 第一个单词是命令
+//         html += processChunk(token, 'cmd-highlight');
+//         commandFound = true;
+//       } else if (token.startsWith('-')) {
+//         // 以'-'开头的是选项
+//         html += processChunk(token, 'comment-highlight');
+//       } else {
+//         // 其他都是参数
+//         html += processChunk(token);
+//       }
+//     }
+//   }
+
+//   // 3. 处理注释部分
+//   if (commentPart) {
+//     html += processChunk(commentPart, 'comment-highlight');
+//   }
+
+//   // 4. 更新DOM
+//   typedText.innerHTML = html;
+
+//   // 5. 控制行尾闪烁光标的显示
+//   if (cursorPosition === buffer.length) {
+//     blockCursor.style.display = "inline-block";
+//   } else {
+//     blockCursor.style.display = "none";
+//   }
+
+//   // 6. 恢复浏览器内部的光标位置以保证输入法（IME）的正常工作
+//   const currentActiveElement = document.activeElement;
+//   const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+//   if (typedTextIsFocused || currentActiveElement === document.body) {
+//     setCaretAtOffset(typedText, cursorPosition);
+//   }
+// }
+
+// script.js
+function updateInputDisplayWithHighlight() {
   if (isComposing) {
     blockCursor.style.display = "none";
     return;
   }
 
-  const currentActiveElement = document.activeElement;
-  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+  let html = '';
+  let bufferIndex = 0;
+
+  const processChunk = (text, className = '') => {
+    let chunkHtml = '';
+    for (const char of text) {
+      if (bufferIndex === cursorPosition && bufferIndex < buffer.length) {
+        // --- JS 关键修复：根据状态动态添加 no-blink 类 ---
+        let highlightClasses = 'highlighted-char';
+        if (isBlinkingPaused) {
+          highlightClasses += ' no-blink';
+        }
+        chunkHtml += `<span class="${highlightClasses}">${escapeHtml(char)}</span>`;
+      } else {
+        chunkHtml += escapeHtml(char);
+      }
+      bufferIndex++;
+    }
+    if (className) {
+      return `<span class="${className}">${chunkHtml}</span>`;
+    }
+    return chunkHtml;
+  };
+
+  const commentIndex = buffer.indexOf('#');
+  let commandPart = buffer;
+  let commentPart = '';
+
+  if (commentIndex !== -1) {
+    commandPart = buffer.substring(0, commentIndex);
+    commentPart = buffer.substring(commentIndex);
+  }
+
+  const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+  let commandFound = false;
+
+  for (const token of tokens) {
+    if (/^\s+$/.test(token)) {
+      html += processChunk(token);
+    } else {
+      if (syntaxHighlightingEnabled && !commandFound) {
+        html += processChunk(token, 'cmd-highlight');
+        commandFound = true;
+      } else if (syntaxHighlightingEnabled && token.startsWith('-')) {
+        html += processChunk(token, 'comment-highlight');
+      } else {
+        // 当 syntax 关闭时，所有部分都按普通文本处理
+        html += processChunk(token);
+      }
+      // if (!commandFound) {
+      //   html += processChunk(token, 'cmd-highlight');
+      //   commandFound = true;
+      // } else if (token.startsWith('-')) {
+      //   html += processChunk(token, 'comment-highlight');
+      // } else {
+      //   html += processChunk(token);
+      // }
+    }
+  }
+
+  if (commentPart) {
+    html += processChunk(commentPart, 'comment-highlight');
+  }
+
+  typedText.innerHTML = html;
 
   if (cursorPosition === buffer.length) {
-    typedText.textContent = buffer;
     blockCursor.style.display = "inline-block";
   } else {
-    const charAtCursor = buffer[cursorPosition] || ' ';
-    typedText.innerHTML =
-      escapeHtml(buffer.substring(0, cursorPosition)) +
-      `<span class="highlighted-char">${escapeHtml(charAtCursor)}</span>` +
-      escapeHtml(buffer.substring(cursorPosition + 1));
     blockCursor.style.display = "none";
   }
 
-  // After updating display, ensure the browser's caret/selection is also at cursorPosition
-  // This helps with IME positioning consistency.
-  // Only set caret if typedText was focused or body (implying typedText should be focused)
-  if (typedTextIsFocused || currentActiveElement === document.body ) {
-      setCaretAtOffset(typedText, cursorPosition);
+  const currentActiveElement = document.activeElement;
+  const typedTextIsFocused = currentActiveElement === typedText || typedText.contains(currentActiveElement);
+  if (typedTextIsFocused || currentActiveElement === document.body) {
+    setCaretAtOffset(typedText, cursorPosition);
   }
 }
 
@@ -814,6 +1067,71 @@ SYNOPSIS
 DESCRIPTION
   Clears all previous output from the terminal screen.`
   },
+
+  syntax: {
+    exec: (args) => {
+      const mode = args[0];
+      if (mode === 'on') {
+        syntaxHighlightingEnabled = true;
+        setSetting('syntaxHighlighting', true);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting enabled.";
+      } else if (mode === 'off') {
+        syntaxHighlightingEnabled = false;
+        setSetting('syntaxHighlighting', false);
+        updateInputDisplay(); // 立即更新当前输入行
+        return "Syntax highlighting disabled.";
+      } else {
+        return `Syntax highlighting is currently ${syntaxHighlightingEnabled ? 'ON' : 'OFF'}. Usage: syntax <on|off>`;
+      }
+    },
+    suggestions: (args) => {
+      if (args.length <= 1) return ['on', 'off'];
+      return [];
+    },
+    manual: `NAME
+  syntax - toggle real-time syntax highlighting
+
+SYNOPSIS
+  syntax [on|off]
+
+DESCRIPTION
+  Enables or disables syntax highlighting for the command input line and command history output.
+  Running 'syntax' without arguments displays the current status.`
+  },
+  welcome: {
+    exec: async () => {
+      const manifest = chrome.runtime.getManifest();
+      print(`Terminal Startup v${manifest.version} - ${detectBrowser()}`);
+      print("Author: Tian Yi, Bao");
+      print("");
+      print("Type 'help' for a list of commands.");
+      print("Type 'about' for more information about start-terminal.");
+      print("");
+      print(`What's new: ${UPDATE_LOG}`);
+      print("");
+      print("Default Search Engine:");
+      print(`  - Current: ${default_search_engine}`, "highlight");
+      print(`  - Current default mode: ${default_mode ? "on" : "off"}`, `${default_mode ? "success" : "warning"}`);
+      print("  - Supported: google, bing, baidu");
+      print("  - Change with: default <search engine|on|off>", "hint");
+      print("");
+
+      // 检查并显示隐私政策更新
+      // const data = await new Promise(resolve => chrome.storage.sync.get('privacyPolicyVersion', resolve));
+      // if (data.privacyPolicyVersion !== PRIVACY_POLICY_VERSION) {
+      //   print("Our Privacy Policy has been updated.", "highlight");
+      //   print(`Please review the changes at: ${PRIVACY_POLICY_URL}`, "info");
+      //   print("Type 'privacy-ok' to dismiss this message.", "hint");
+      //   print("");
+      // }
+    },
+    manual: `NAME
+  welcome - display the welcome message and version information.
+
+SYNOPSIS
+  welcome`
+  },
   cursor: (args) => {
     const supportedStyles = ['block', 'bar', 'underline'];
     const style = args[0];
@@ -833,24 +1151,40 @@ DESCRIPTION
   },
   ls: {
     exec: (args, options, pipedInput) => {
-        // 1. Get ALL real items from the current directory first.
-        let allItems = (current.children || []).map(child => ({
+        let targetNode;
+        const pathArg = args.join(' ');
+
+        // --- 1. 新增：解析路径参数 ---
+        if (pathArg) {
+            const result = findNodeByPath(pathArg);
+            if (!result || !result.node) {
+                return `ls: cannot access '${pathArg}': No such file or directory`;
+            }
+            // 如果路径指向一个文件而不是文件夹，则直接打印文件名
+            if (!result.node.children) {
+                return result.node.title;
+            }
+            targetNode = result.node;
+        } else {
+            // 如果没有路径参数，则使用当前目录
+            targetNode = current;
+        }
+        // --- 路径解析结束 ---
+
+        // 2. 后续逻辑使用 targetNode 而不是 current
+        let allItems = (targetNode.children || []).map(child => ({
             title: child.title,
             node: child,
             className: child.children ? 'folder' : (child.url && child.url.startsWith("javascript:") ? 'exec' : 'file')
         }));
 
-        // ★★★ NEW LOGIC: Filter items based on the '-a' option ★★★
-        // If '-a' is NOT present, filter out items that start with '.'
         const itemsToDisplay = options.a 
             ? allItems 
             : allItems.filter(item => !item.title.startsWith('.'));
         
-        // 3. Sort the filtered items alphabetically.
         itemsToDisplay.sort((a, b) => a.title.localeCompare(b.title));
 
-        // 4. Proceed with the display logic using the correctly filtered list.
-        if (options.l) { // Handle -l (long format)
+        if (options.l) {
             if (itemsToDisplay.length === 0) return [];
             return itemsToDisplay.map(item => {
                 const owner = user || 'root';
@@ -864,7 +1198,6 @@ DESCRIPTION
             });
         }
 
-        // Standard multi-column layout
         if (itemsToDisplay.length === 0) return [];
         
         const terminalWidth = Math.floor(output.clientWidth / CHARACTER_WIDTH);
@@ -896,7 +1229,18 @@ DESCRIPTION
         }
         return outputLines;
     },
-    manual: "NAME\n  ls - list directory contents\n\nSYNOPSIS\n  ls [-l] [-a]\n\nDESCRIPTION\n  List information about the bookmarks and folders (non-recursively).\n\n  -l\tuse a long listing format.\n  -a\tdo not ignore entries starting with ."
+    manual: `NAME
+  ls - list directory contents
+
+SYNOPSIS
+  ls [-la] [path]
+
+DESCRIPTION
+  List information about the bookmarks and folders in the specified [path].
+  If no path is given, the contents of the current directory are listed.
+
+  -l    use a long listing format.
+  -a    do not ignore entries starting with .`
   },
   cd: {
     exec: (args) => {
@@ -912,6 +1256,10 @@ DESCRIPTION
                 current = path[path.length - 1];
                 saveCurrentPath();
             }
+        } else if (targetPath === "~"){
+          current = homeDirNode;
+          path = [root, homeDirNode];
+          saveCurrentPath();
         } else {
             const result = findNodeByPath(targetPath);
             if (result && result.node && result.node.children) { // Ensure it's a directory
@@ -1053,183 +1401,284 @@ DESCRIPTION
     });
     done();
   },
-  // Theme 
   theme: {
-    exec: (args, options) => {
-        const supportedThemes = ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
-        const themeName = args[0];
-        if (!themeName) {
-            return `Current theme: ${promptTheme}. Supported: ${supportedThemes.join(', ')}.`;
+    exec: async (args, options) => {
+        const arg = args[0];
+        if (!arg) {
+            print(`Current theme: ${promptTheme}.`, 'info');
+            print(`Current background mode: ${backgroundMode} (${backgroundModeAuto ? 'auto' : 'manual'}).`, 'info');
+            print(`Supported themes: ${SUPPORTED_THEMES.join(', ')}.`, 'info');
+            print(`Supported modes: light, dark.`, 'info');
+            return;
         }
-        if (supportedThemes.includes(themeName)) {
-            applyTheme(themeName);
-            return `Theme set to ${themeName}.`;
+
+        // 处理 light/dark 手动切换
+        if (arg === 'light' || arg === 'dark') {
+            backgroundModeAuto = false; // 切换到手动模式
+            applyBackgroundMode(arg);
+            await setSetting('backgroundMode', arg);
+            await setSetting('backgroundModeAuto', false);
+            return `Background overlay manually set to ${arg} mode.`;
+        }
+
+        // 处理颜色主题切换
+        if (SUPPORTED_THEMES.includes(arg)) {
+            backgroundModeAuto = true; // 切换回自动模式
+            applyTheme(arg); // applyTheme 会自动处理 light/dark
+            await setSetting('backgroundModeAuto', true);
+            return `Theme set to ${arg}.`;
         } else {
-            return `Error: Theme '${themeName}' not supported.`;
+            return `Error: Unknown theme or mode '${arg}'.`;
         }
     },
     suggestions: (args) => {
         if (args.length <= 1) {
-            return ['default', 'ubuntu', 'powershell', 'cmd', 'kali', 'debian'];
+            return [...SUPPORTED_THEMES, 'light', 'dark'];
         }
         return [];
     },
     manual: `NAME
-  theme - change the terminal's color scheme
+  theme - change the terminal's color scheme and background mode
 
 SYNOPSIS
-  theme [<theme_name>]
+  theme [<theme_name> | light | dark]
 
 DESCRIPTION
-  Switches the visual theme of the terminal. If no theme is provided, it lists the current and available themes.
+  Switches the visual theme or the background overlay mode.
+  - Setting a <theme_name> will automatically select a light or dark overlay.
+  - Setting 'light' or 'dark' manually overrides the automatic selection.
+  If no argument is provided, it lists the current and available options.`
+  },
 
-AVAILABLE THEMES
-  default, ubuntu, powershell, cmd, kali, debian`
+  source: {
+    exec: async (args) => {
+      const targetFile = args[0] || '.startrc';
+
+      if (targetFile !== '.startrc') {
+        print(`source: only supports '.startrc' at the moment.`, 'error');
+        return;
+      }
+
+      // 步骤 1: 使用内存中的快照找到文件的 ID
+      const rcFileInMemory = await findFileInHome('.startrc');
+      if (!rcFileInMemory) {
+        print(`source: ${targetFile}: No such file or directory.`, 'error');
+        return;
+      }
+
+      print(`Reloading ${targetFile}...`, 'info');
+
+      // --- 关键修复：使用文件 ID 从 Chrome API 获取最新的书签数据 ---
+      const rcFileFresh = await new Promise(resolve => {
+        chrome.bookmarks.get(rcFileInMemory.id, (results) => {
+          resolve(results && results.length > 0 ? results[0] : null);
+        });
+      });
+
+      if (!rcFileFresh || !rcFileFresh.url) {
+        print(`source: Could not reload ${targetFile}. Bookmark may be invalid or deleted.`, 'error');
+        return;
+      }
+      // --- 修复结束 ---
+
+      // 步骤 2: 清空现有配置，准备接收新配置
+      Object.keys(aliases).forEach(key => delete aliases[key]);
+      Object.keys(environmentVars).forEach(key => delete environmentVars[key]);
+
+      // 步骤 3: 使用最新的文件内容进行解析和应用
+      try {
+        const scriptContent = decodeURIComponent(rcFileFresh.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent);
+        print(`${targetFile} reloaded successfully.`, 'success');
+      } catch (e) {
+        print(`Error reading or applying ${targetFile}: ${e.message}`, 'error');
+      }
+    },
+    manual: `NAME
+  source - read and execute commands from a file
+
+SYNOPSIS
+  source <filename>
+
+DESCRIPTION
+  Reads and executes commands from <filename> in the current shell context.
+  Currently, only 'source .startrc' is supported.`
   },
 
   config: {
     exec: async (args) => {
-    const subCommand = args.shift() || 'status';
+      const subCommand = args.shift() || 'status';
+      const mode = args[0];
 
-    // Helper function for migration logic to avoid repetition
-    const migrateToBookmarks = async () => {
-        print("Migrating settings from storage to bookmarks...");
-        for (const key of CONFIG_KEYS) {
-            const storageData = await new Promise(resolve => chrome.storage.sync.get(key, resolve));
-            let valueToWrite = storageData[key];
-
-            // ★★★ FIX IS HERE ★★★
-            // If the value is missing from storage, create a default value.
-            if (valueToWrite === undefined) {
-                print(`'${key}' not found in storage, creating default bookmark...`, "hint");
-                switch (key) {
-                    case 'aliases':
-                    case 'environmentVars':
-                        valueToWrite = {};
-                        break;
-                    case 'settings':
-                        valueToWrite = { default_mode: default_mode, default_search_engine: default_search_engine };
-                        break;
-                    case 'theme':
-                        valueToWrite = promptTheme || 'default';
-                        break;
-                    case 'cursorStyle':
-                        valueToWrite = cursorStyle || 'block';
-                        break;
-                    default:
-                        valueToWrite = null; // Don't write unknown keys
-                }
-            }
-            
-            if (valueToWrite !== null) {
-                await writeSettingToBookmark(key, valueToWrite);
-            }
-        }
-        print("Migration complete.", "success");
-    };
-
-
-    switch (subCommand) {
+      switch (subCommand) {
         case 'setup':
-            const mode = args[0];
-            if (mode !== 'bookmark' && mode !== 'storage') {
-                print("Usage: config setup <bookmark|storage>", "error");
-                return;
+          if (!['storage', 'bookmark', 'startrc'].includes(mode)) {
+            print("Usage: config setup <storage|bookmark|startrc>", "error");
+            return;
+          }
+
+          if (mode === 'startrc') {
+            // --- 全新的 .startrc 设置流程 ---
+            print("Setting up .startrc configuration mode...", "highlight");
+            let imported = false;
+
+            // 1. 检查并询问是否从 .settings 文件夹导入
+            const settingsFolder = await getOrCreateSettingsFolder();
+            if (settingsFolder) {
+              const confirmImportBookmark = await userInputMode("Found legacy '.settings' folder. Import from it? [Y/n] ");
+              print(`Found legacy '.settings' folder. Import from it? [Y/n] ${user_input_content}`);
+
+              if (confirmImportBookmark) {
+                const settingsToImport = {};
+                for (const key of CONFIG_KEYS) {
+                  settingsToImport[key] = await readSettingFromBookmark(key);
+                }
+                const startrcContent = generateStartrcContent(settingsToImport);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from .settings and created ~/.startrc.", "success");
+                
+                const confirmDelete = await userInputMode("Delete the old '.settings' folder? [Y/n] ");
+                print(`Delete the old '.settings' folder? [Y/n] ${user_input_content}`);
+                if (confirmDelete) {
+                  await new Promise(resolve => chrome.bookmarks.removeTree(settingsFolder.id, resolve));
+                  print("'.settings' folder removed.", "success");
+                }
+                imported = true;
+              }
             }
 
-            if (mode === 'bookmark') {
-                let settingsFolder = await getOrCreateSettingsFolder(false);
-                if (settingsFolder) {
-                    print("'.settings' folder already exists.", "warning");
-                    let replace = await userInputMode("Replace settings in bookmark with settings from storage? [Y/n] ");
-                    print(`Replace settings in bookmark with settings from storage? [Y/n] ${user_input_content}`)
-                    if (replace) {
-                        await migrateToBookmarks();
-                    } else {
-                        print("Keeping existing bookmark settings.", "info");
-                    }
-                } else {
-                    let confirm = await userInputMode("This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ");
-                    print(`This will create a hidden configuration folder in your home directory (~/.settings) for custom settings. Proceed? [Y/n] ${user_input_content}`)
-                    if (confirm) {
-                        await getOrCreateSettingsFolder(true); // Ensure folder is created before migration
-                        await migrateToBookmarks();
-                    } else {
-                        print("Setup aborted by user.", "info");
-                        return;
-                    }
-                }
+            // 2. 如果未从书签导入，则询问是否从 storage 导入
+            if (!imported) {
+              const confirmImportStorage = await userInputMode("Import settings from browser storage? [Y/n] ");
+              print(`Import settings from browser storage? [Y/n] ${user_input_content}`);
+
+              if (confirmImportStorage) {
+                const data = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+                const startrcContent = generateStartrcContent(data);
+                await createOrUpdateStartrcFile(startrcContent);
+                print("Successfully imported from storage and created ~/.startrc.", "success");
+                imported = true;
+              }
             }
             
-            configMode = mode;
-            await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
-            print(`Configuration mode set to: ${configMode}`, "success");
-            break;
-
-        case 'sync':
-            awaiting();
-            if (configMode === 'storage') {
-                print("Syncing: Bookmarks -> Storage not implemented yet. Switch to bookmark mode to sync from storage.", "warning");
-                // The logic for Bookmarks -> Storage would be more complex
-                // as it involves reading all bookmark files and setting them in storage.
-            } else { // configMode === 'bookmark'
-                await migrateToBookmarks();
+            // 3. 如果都未导入，则创建默认文件
+            if (!imported) {
+                const confirmCreateDefault = await userInputMode("Create a default .startrc file? [Y/n] ");
+                print(`Create a default .startrc file? [Y/n] ${user_input_content}`);
+                if (confirmCreateDefault) {
+                  await createOrUpdateStartrcFile(); // 不传参数，使用默认值
+                  print("Created default ~/.startrc file.", "success");
+                }
             }
-            done();
-            break;
+            print("\nHint: You can now edit the config with: nano .startrc", "hint");
 
-        case 'autosync':
-            autosyncEnabled = !autosyncEnabled;
-            await new Promise(resolve => chrome.storage.sync.set({ autosyncEnabled: autosyncEnabled }, resolve));
-            print(`Autosync is now ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}.`, "success");
-            if (autosyncEnabled) {
-                print("Changes will now be saved to both backends automatically.", "hint");
+          } else if (mode === 'bookmark') {
+            // --- 最终修复版本: 完整的交互式 bookmark 设置流程 ---
+            print("Setting up bookmark configuration mode...", "highlight");
+
+            let settingsFolder = await getOrCreateSettingsFolder(false); // 先检查，不创建
+
+            if (settingsFolder) {
+              print("'.settings' folder already exists. Mode switched.", "success");
+            } else {
+              // 如果文件夹不存在，开始询问流程
+              const confirmCreation = await userInputMode("This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ");
+              print(`This will create a '.settings' folder in your bookmarks bar. Continue? [Y/n] ${user_input_content}`);
+
+              if (!confirmCreation) {
+                print("Operation aborted by user.", "warning");
+                return; // 用户不同意，则完全中止
+              }
+              
+              // 用户同意后，创建文件夹
+              settingsFolder = await getOrCreateSettingsFolder(true);
+              if (!settingsFolder) {
+                print("Error: Could not create the ~/.settings folder.", "error");
+                return;
+              }
+              print("Created '.settings' folder.", "success");
+
+              // 然后询问是否从 storage 迁移
+              const confirmMigration = await userInputMode("Migrate existing settings from browser storage? (No=create defaults) [Y/n] ");
+              print(`Migrate existing settings from browser storage? (No=create defaults) [Y/n] ${user_input_content}`);
+
+              let settingsToWrite;
+              if (confirmMigration) {
+                print("Migrating settings from storage...", "info");
+                settingsToWrite = await new Promise(resolve => chrome.storage.sync.get(CONFIG_KEYS, resolve));
+              } else {
+                print("Creating default settings...", "info");
+                settingsToWrite = {}; // 创建空对象，以便后面使用默认值
+              }
+
+              // 定义默认值，用于填充缺失的配置
+              const defaultSettings = {
+                aliases: {},
+                environmentVars: {},
+                theme: 'default',
+                cursorStyle: 'block',
+                settings: { default_mode: false, default_search_engine: "google" }
+              };
+              
+              // 循环所有必需的键，确保写入
+              const writePromises = [];
+              for (const key of CONFIG_KEYS) {
+                  const valueToWrite = settingsToWrite[key] ?? defaultSettings[key];
+                  if (valueToWrite !== undefined) {
+                      writePromises.push(writeSettingToBookmark(key, valueToWrite));
+                  }
+              }
+              await Promise.all(writePromises);
+              print("Configuration files created successfully.", "success");
             }
-            break;
 
+          } else if (mode === 'storage') {
+            print("Switching to browser storage mode.", "info");
+          }
+          configMode = mode;
+          await new Promise(resolve => chrome.storage.sync.set({ configMode: configMode }, resolve));
+          print(`Configuration mode set to: ${configMode}`, "success");
+          break;
+        
+        // ... 其他 case 保持不变 ...
         case 'status':
         default:
-            print("--- Configuration Status ---", "highlight");
-            print(`Current Mode: ${configMode}`);
-            print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
-            print("\nAvailable commands:", "hint");
-            print("  config setup <bookmark|storage> - Set the primary settings backend.");
-            print("  config sync                     - Sync settings from storage to bookmarks.");
-            print("  config autosync                 - Toggle auto-syncing on changes.");
-            break;
+          print("--- Configuration Status ---", "highlight");
+          print(`Current Mode: ${configMode}`);
+          print(`Autosync:     ${autosyncEnabled ? 'ENABLED' : 'DISABLED'}`);
+          print("\nAvailable modes: 'storage', 'bookmark', 'startrc' (recommended)", "hint");
+          print("  config setup <mode> - Set the primary settings backend.");
+          break;
       }
     },
+    // ... suggestions 和 manual 部分保持不变 ...
     suggestions: (args) => {
-        const subCommand = args[0];
-        if (args.length <= 1) {
-            return ['setup', 'sync', 'autosync', 'status'];
-        }
-        if (subCommand === 'setup' && args.length <= 2) {
-            return ['bookmark', 'storage'];
-        }
-        return [];
+      const subCommand = args[0];
+      if (args.length <= 1) {
+        return ['setup', 'sync', 'autosync', 'status'];
+      }
+      if (subCommand === 'setup' && args.length <= 2) {
+        return ['startrc', 'storage', 'bookmark'];
+      }
+      return [];
     },
     manual: `NAME
   config - manage terminal configuration
 
 SYNOPSIS
-  config [setup <mode> | sync | autosync | status]
+  config [setup <mode> | status]
 
 DESCRIPTION
   Manages how and where terminal settings are stored.
 
-  setup <bookmark|storage>
-    Sets the primary settings backend. 'storage' is the browser's sync storage. 'bookmark' uses a hidden ~/.settings folder in your bookmarks bar, allowing for manual editing.
-
-  sync
-    In bookmark mode, this command pulls all settings from browser storage and writes them to the ~/.settings folder, creating default files if they don't exist.
-
-  autosync
-    Toggles automatic synchronization. When enabled, settings are written to both backends simultaneously.
+  setup <startrc|storage|bookmark>
+    Sets the primary settings backend.
+    'startrc' (Recommended): Executes a ~/.startrc file on startup for maximum flexibility.
+    'storage' (Legacy): Uses the browser's sync storage.
+    'bookmark' (Legacy): Uses a hidden ~/.settings folder in your bookmarks bar.
 
   status
-    Displays the current configuration mode and autosync status.`
-    
+    Displays the current configuration mode.`
   },
 
   uploadbg: () => {
@@ -1827,78 +2276,93 @@ DESCRIPTION
   },
 
 
-  help: () => {
-    print("");
-    print("--- Terminal Help ---", "highlight");
-    print("");
+  // script.js (in the commands object)
 
-    print("Search Commands", "highlight");
-    print("  google, bing, baidu, yt, ...  - Search on a specific engine.");
-    print("  default <engine|on|off>       - Manage the default search behavior.");
-    print("");
-    
-    print("Navigation & Bookmarks", "highlight");
-    print("  ls [-la]                      - List bookmarks in the current directory.");
-    print("  cd <folder>                   - Change directory.");
-    print("  pwd                           - Show current bookmark path.");
-    print("  goto <url> [-b]               - Navigate to a specific URL.");
-    print("  tree                          - Display the directory tree structure.");
-    print("  ./<bookmark_name>             - Open a bookmark in the current directory.");
-    print("");
+  help: {
+    exec: () => {
+        print("");
+        print("--- Terminal Help ---", "highlight");
+        print("");
 
-    print("File & Directory Operations", "highlight");
-    print("  mkdir <folder>                - Create a new bookmark folder.");
-    print("  touch <file>                  - Create a new, empty bookmark.");
-    print("  mv <src> <dest>               - Move or rename a bookmark/folder.");
-    print("  cp [-r] <src> <dest>          - Copy a bookmark or folder.");
-    print("  rm [-r] <name>                - Remove a bookmark or folder.");
-    print("  rmdir <folder>                - Remove an empty bookmark folder.");
-    print("  find <path> -name <pattern>   - Find bookmarks/folders by name.");
-    print("  cat <bookmark>                - Display details of a bookmark.");
-    print("");
-    
-    print("Editors", "highlight");
-    print("  nano <file>                   - Edit a bookmark or setting file with a simple editor.");
-    print("  vim <file>                    - Edit a bookmark's raw data with a Vim-like editor.");
-    print("");
+        print("Search Commands", "highlight");
+        print("  google, bing, baidu, youtube, ... - Search on a specific engine.");
+        print("  default <engine|on|off>         - Manage the default search behavior.");
+        print("");
+        
+        print("Navigation & Bookmarks", "highlight");
+        print("  ls [-la]                        - List bookmarks in the current directory.");
+        print("  cd <folder>                     - Change directory.");
+        print("  pwd                             - Show current bookmark path.");
+        print("  goto <url> [-b]                 - Navigate to a specific URL.");
+        print("  tree                            - Display the directory tree structure.");
+        print("  ./<bookmark_name>               - Open a bookmark in the current directory.");
+        print("");
 
-    print("Browser & System Control", "highlight");
-    print("  tabs <ls|close|switch>        - Manage browser tabs.");
-    print("  downloads <ls>                - List recent downloads.");
-    print("  wget <url>                    - Download a file from a URL.");
-    print("  ping <host>                   - Ping a host.");
-    print("  date                          - Show current date and time.");
-    print("  clear (or cls)                - Clear the terminal screen.");
-    print("");
+        print("File & Directory Operations", "highlight");
+        print("  mkdir <folder>                  - Create a new bookmark folder.");
+        print("  touch <file>                    - Create a new, empty bookmark.");
+        print("  mv <src> <dest>                 - Move or rename a bookmark/folder.");
+        print("  cp [-r] <src> <dest>            - Copy a bookmark or folder.");
+        print("  rm [-r] <name>                  - Remove a bookmark or folder.");
+        print("  rmdir <folder>                  - Remove an empty bookmark folder.");
+        print("  find <path> -name <pattern>     - Find bookmarks/folders by name.");
+        print("  cat <bookmark>                  - Display details of a bookmark.");
+        print("");
+        
+        print("Editors", "highlight");
+        print("  nano <file>                     - Edit a bookmark or config file with a simple editor.");
+        print("  vim <file>                      - Edit a bookmark's raw data with a Vim-like editor.");
+        print("");
 
-    print("Shell, Environment & History", "highlight");
+        print("Browser & System Control", "highlight");
+        print("  tabs <ls|close|switch>          - Manage browser tabs.");
+        print("  downloads <ls>                  - List recent downloads.");
+        print("  wget <url>                      - Download a file from a URL.");
+        print("  ping <host>                     - Ping a host.");
+        print("  date                            - Show current date and time.");
+        print("  clear (or cls)                  - Clear the terminal screen.");
+        print("");
 
-    print("  export VAR=value              - Set an environment variable.");
-    print("  unset <VAR_NAME>              - Unset an environment variable.");
-    print("  env                           - Display environment variables.");
-    print("  grep <pattern>                - Filter piped input.");
-    print("  history                       - Show command history.");
-    print("  alias [name='cmd']            - Create or list command aliases.");
-    print("  unalias <name>                - Remove an alias.");
-    print("");
-    
-    print("Account, Customization & Meta", "highlight");
-    print("  mslogin / mslogout            - Log in/out with a Microsoft account.");
-    print("  theme <name>                  - Change terminal theme.");
-    print("  cursor <style>                - Change cursor style (block, bar, underline).");
-    print("  uploadbg / setbg              - Manage custom background.");
-    print("  setbgAPI <url>                - Set the random background image API URL.");
-    print("  config <setup|sync|...>       - Manage how and where settings are stored.");
-    print("  apt <update|upgrade>          - Check for or apply extension updates.");
-    print("  about [-V]                    - Show details about this extension.");
-    print("  feedback                      - Provide feedback or rate the extension.");
-    print("  man <command>                 - Show the manual page for a command.");
-    print("");
+        print("Shell, Environment & History", "highlight");
+        print("  source <file>                   - Reload and execute a configuration file (e.g., .startrc).");
+        print("  export VAR=value                - Set an environment variable.");
+        print("  unset <VAR_NAME>                - Unset an environment variable.");
+        print("  env                             - Display environment variables.");
+        print("  grep <pattern>                  - Filter piped input.");
+        print("  history                         - Show command history.");
+        print("  alias [name='cmd']              - Create or list command aliases.");
+        print("  unalias <name>                  - Remove an alias.");
+        print("");
+        
+        print("Account, Customization & Meta", "highlight");
+        print("  welcome                         - Display the startup welcome message.");
+        print("  syntax [on|off]                 - Toggle command syntax highlighting.");
+        print("  mslogin / mslogout              - Log in/out with a Microsoft account.");
+        print("  theme <name>                    - Change terminal theme.");
+        print("  cursor <style>                  - Change cursor style (block, bar, underline).");
+        print("  uploadbg / setbg                - Manage custom background.");
+        print("  setbgAPI <url>                  - Set the random background image API URL.");
+        print("  config <setup|...>              - Manage how settings are stored (e.g., '.startrc' mode).");
+        print("  apt <update|upgrade>            - Check for or apply extension updates.");
+        print("  about [-V]                      - Show details about this extension.");
+        print("  feedback                        - Provide feedback or rate the extension.");
+        print("  man <command>                   - Show the manual page for a command.");
+        print("");
 
-    print("For more details on a command, type: man <command_name>", "hint");
-    return ""; 
+        print("For more details on a command, type: man <command_name>", "hint");
+        return ""; 
+    },
+    manual: `NAME
+  help - display information about built-in commands
+
+SYNOPSIS
+  help
+
+DESCRIPTION
+  Displays a summary of all available commands, grouped by category.`
   },
-  about: (args, options) => {
+  about: {
+    exec: async (args, options) => {
     const manifest = chrome.runtime.getManifest();
 
     if (options.version || options.V || options.v) {
@@ -1911,14 +2375,13 @@ DESCRIPTION
     const titleArt = start_terminal_ascii.split('\n');
 
     titleArt.forEach(line => print(line, 'highlight'));
-    // print(titleArt);
     print(""); // Spacer
 
     // Gather all details into an array of objects
     const details = [
         { label: "Version", value: manifest.version },
         { label: "Author", value: manifest.author },
-        { label: "License", value: "MIT License" }, // You can change this if you use a different license
+        { label: "License", value: "MIT License" },
         { label: "Homepage", value: manifest.homepage_url },
         { label: "Repository", value: GITHUB_REPO_URL ? GITHUB_REPO_URL : "Not specified" },
         { label: "Privacy Policy", value: PRIVACY_POLICY_URL },
@@ -1929,19 +2392,33 @@ DESCRIPTION
         { label: "Language", value: navigator.language },
     ];
 
-    // Calculate the longest label for alignment
     const longestLabel = details.reduce((max, item) => Math.max(max, getVisualWidth(item.label)), 0);
+    const urlLabels = ["Homepage", "Repository", "Privacy Policy"];
 
     // Print each detail in a formatted key-value pair
     details.forEach(item => {
         const padding = ' '.repeat(longestLabel - getVisualWidth(item.label));
-        const line = `<span class="output-folder">${item.label}${padding}</span> : ${item.value}`;
+        let displayValue;
+
+        // --- START OF FIX ---
+        // Check if the current item's label is one that should contain a URL.
+        if (urlLabels.includes(item.label) && typeof item.value === 'string' && item.value.startsWith('http')) {
+            // If it is a URL, create an anchor tag for it.
+            displayValue = `<a href="${item.value}" target="_blank" rel="noopener noreferrer" class="terminal-link">${escapeHtml(item.value)}</a>`;
+        } else {
+            // For all other values, escape them to prevent any potential HTML injection.
+            displayValue = escapeHtml(String(item.value));
+        }
+        // --- END OF FIX ---
+
+        const line = `<span class="output-folder">${item.label}${padding}</span> : ${displayValue}`;
         print(line, 'info', true);
     });
 
     return ""; // Return nothing to avoid an extra blank line from the engine
   },
-  feedback: async () => {
+},
+feedback: async () => {
     print("How can we help?", "highlight");
     print("");
     print("[1] Rate The Extension");
@@ -2137,44 +2614,62 @@ function findNodeByPath(pathStr) {
 // Alias 
 // commands.yt = commands.youtube;
 
+// script.js
+
 function setupNanoEditor(args) {
-    if (args.length === 0) return "Usage: nano <bookmark_name>";
+    if (args.length === 0) {
+        print("Usage: nano <bookmark_name>");
+        return;
+    }
     const bookmarkName = args.join(' ');
     const target = findChildByTitleFileOrDir(current.children || [], bookmarkName);
 
-    if (!target) return `nano: '${bookmarkName}': No such file.`;
-    if (target.children) return `nano: '${bookmarkName}': Is a directory.`;
+    if (!target) {
+        print(`nano: '${bookmarkName}': No such file.`);
+        return;
+    }
+    if (target.children) {
+        print(`nano: '${bookmarkName}': Is a directory.`);
+        return;
+    }
 
     isEditing = true;
     activeEditor = 'nano';
     editingBookmarkId = target.id;
-    editingBookmarkTitle = target.title; // ★★★ 新增：保存当前文件名 ★★★
+    editingBookmarkTitle = target.title;
     unsavedChanges = false;
     
+    // --- NANO .startrc 绿灯逻辑 ---
+    const isStartrcFile = editingBookmarkTitle === '.startrc';
     const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
     document.getElementById('nano-fields').style.display = 'none';
-    document.getElementById('editor-textarea').style.display = 'none';
-
-    if (isSettingsFile) {
-        const textarea = document.getElementById('editor-textarea');
+    const textarea = document.getElementById('editor-textarea');
+    textarea.style.display = 'block'; // 总是显示文本区域
+    textarea.readOnly = false;
+    
+    // 如果是 .startrc 或旧的配置文件，就从URL解码内容
+    if (isStartrcFile || isSettingsFile) {
         try {
-            const rawJson = decodeURIComponent(target.url.split('#')[1] || '');
-            const parsedJson = JSON.parse(rawJson);
-            textarea.value = JSON.stringify(parsedJson, null, 2);
+            const rawContent = decodeURIComponent(target.url.split('#')[1] || '');
+            // 如果是旧的设置文件，美化一下JSON，否则直接显示内容
+            textarea.value = isSettingsFile ? JSON.stringify(JSON.parse(rawContent), null, 2) : rawContent;
         } catch (e) {
-            textarea.value = "Error: Could not parse bookmark data. Saving will overwrite.";
+            textarea.value = `Error parsing file content: ${e.message}. Saving will overwrite.`;
         }
-        textarea.style.display = 'block';
-        textarea.readOnly = false;
-        setTimeout(() => textarea.focus(), 0);
     } else {
+        // 对于普通书签，隐藏文本区，显示标题和URL输入框
+        textarea.style.display = 'none';
         document.getElementById('nano-fields').style.display = 'block';
         editorTitleInput.value = target.title;
         editorUrlInput.value = target.url;
-        editorTitleInput.focus();
+        setTimeout(() => editorTitleInput.focus(), 0);
     }
     
+    if (textarea.style.display === 'block') {
+      setTimeout(() => textarea.focus(), 0);
+    }
+
     editorStatus.textContent = `Editing: ${target.title}`;
     document.getElementById('editor-footer').innerHTML = `<span class="editor-shortcut">^S</span> Save    <span class="editor-shortcut">^X</span> Exit`;
     
@@ -2384,9 +2879,17 @@ function print(text, type = "info", allowHtml = false) {
     return; // Divert output to the buffer and stop here.
   }
 
-  if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
-    return; // If it doesn't match, simply don't print.
+  // if (activeGrepPattern && !activeGrepPattern.test(String(text))) {
+  //   return; // If it doesn't match, simply don't print.
+  // }
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = allowHtml ? String(text) : escapeHtml(String(text));
+  if (activeGrepPattern && !activeGrepPattern.test(tempDiv.textContent || "")) {
+    return; // If it doesn't match the visible text, don't print.
   }
+
+
   // 1. Record this print action to our history log
   outputHistory.push({ text, type, allowHtml });
 
@@ -2400,8 +2903,43 @@ function print(text, type = "info", allowHtml = false) {
   if (allowHtml) {
     contentSpan.innerHTML = content;
   } else {
-    contentSpan.innerHTML = escapeHtml(content);
+    // If plain text, use the safe linkify method.
+    const urlRegex = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])|(\bwww\.[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+    let lastIndex = 0;
+    let match;
+
+    contentSpan.textContent = ''; // Clear span before appending nodes
+
+    while ((match = urlRegex.exec(content)) !== null) {
+      // Append the text before the link
+      if (match.index > lastIndex) {
+        contentSpan.appendChild(document.createTextNode(content.substring(lastIndex, match.index)));
+      }
+      
+      // Create and append the link element
+      const url = match[0];
+      let href = url;
+      if (href.startsWith('www.')) {
+        href = 'http://' + href;
+      }
+      
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.className = 'terminal-link';
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.appendChild(document.createTextNode(url)); // Use createTextNode for safety
+      contentSpan.appendChild(anchor);
+
+      lastIndex = urlRegex.lastIndex;
+    }
+
+    // Append any remaining text after the last link
+    if (lastIndex < content.length) {
+      contentSpan.appendChild(document.createTextNode(content.substring(lastIndex)));
+    }
   }
+
   lineDiv.appendChild(contentSpan);
   output.appendChild(lineDiv);
 
@@ -2409,7 +2947,6 @@ function print(text, type = "info", allowHtml = false) {
     const paddingSpan = document.createElement('span');
     paddingSpan.className = 'line-padding';
 
-    // ★★★ THE FIX: Use getVisualWidth to calculate padding correctly ★★★
     const visualWidth = getVisualWidth(contentSpan.textContent || "");
     const terminalWidthChars = Math.floor(output.clientWidth / CHARACTER_WIDTH);
     
@@ -2752,13 +3289,28 @@ function handleSudoCheck(originalCommandStr) {
 }
 
 async function executeLine(line) {
+
+    // Comments 
+    const originalLineToPrint = line;
+    line = line.split('#')[0].trim(); // Remove comments
+
     if (line.trim() === "") {
-        print(`${full_path} `);
+        print(`${full_path} ${originalLineToPrint}`); // Print the original line with comments
         print("");
+        done();
         return;
     }
     
-    print(`${full_path} ${line}`);
+    // print(`${full_path} ${line}`);
+    // print(`${full_path} ${originalLineToPrint}`);
+
+    if (syntaxHighlightingEnabled) {
+        const promptHtml = escapeHtml(full_path) + ' ';
+        const commandHtml = highlightLineForOutput(originalLineToPrint);
+        print(promptHtml + commandHtml, 'info', true);
+    } else {
+        print(`${full_path} ${originalLineToPrint}`);
+    }
 
     const commandTokens = tokenizeLine(line);
     let lastCommandSuccess = true;
@@ -3074,51 +3626,365 @@ function showPrivacyUpdateNotice() {
 //   bgUploadInput.addEventListener('change', handleFileSelect);
 // }
 
-async function loadSettings() {
-  // 1. Get the complete bookmark tree asynchronously
-  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
-  const trueRoot = bookmarkTree[0];
-  
-  root = trueRoot; 
 
-  // Set the home directory '~' to be the "Favorites bar"
-  if (trueRoot.children && trueRoot.children.length > 0) {
-    homeDirNode = trueRoot.children[0];
-  } else {
-    homeDirNode = root; 
+// script.js
+
+/**
+ * 根据一个设置对象生成 .startrc 文件的内容字符串。
+ * @param {object} settings - 包含配置的对象 (e.g., { theme: 'ubuntu', aliases: {...} })
+ * @returns {string} - 格式化后的 .startrc 文件内容。
+ */
+function generateStartrcContent(settings) {
+  let content = "# Auto-generated .startrc from previous settings\n\n";
+
+  // 处理主题
+  if (settings.theme) {
+    content += `# Set the visual theme.\n`;
+    content += `theme ${settings.theme}\n\n`;
   }
 
+  // 处理光标样式
+  if (settings.cursorStyle) {
+    content += `# Set the cursor style.\n`;
+    content += `cursor ${settings.cursorStyle}\n\n`;
+  }
+
+  // 处理别名
+  if (settings.aliases && Object.keys(settings.aliases).length > 0) {
+    content += "# Command Aliases\n";
+    for (const name in settings.aliases) {
+      // 对包含空格的命令加引号
+      const command = settings.aliases[name];
+      content += `alias ${name}='${command}'\n`;
+    }
+    content += '\n';
+  }
+
+  // 处理环境变量
+  if (settings.environmentVars && Object.keys(settings.environmentVars).length > 0) {
+    content += "# Environment Variables\n";
+    for (const key in settings.environmentVars) {
+      const value = settings.environmentVars[key];
+      // 对包含空格的值加引号
+      content += `export ${key}="${value}"\n`;
+    }
+    content += '\n';
+  }
+  
+  // 添加欢迎消息
+  content += "# Welcome message\n";
+  content += "welcome\n\n";
+
+  content += "echo \"Settings imported. Welcome to the new .startrc mode!\"";
+  return content;
+}
+
+
+/**
+ * 为输出行生成高亮语法的HTML。
+ * @param {string} line - 要高亮的命令字符串。
+ * @returns {string} - 包含高亮标签的HTML字符串。
+ */
+function highlightLineForOutput(line) {
+    let html = '';
+    const commentIndex = line.indexOf('#');
+    let commandPart = line;
+    let commentPart = '';
+
+    if (commentIndex !== -1) {
+        commandPart = line.substring(0, commentIndex);
+        commentPart = line.substring(commentIndex);
+    }
+
+    const tokens = commandPart.match(/(\s+)|([^\s]+)/g) || [];
+    let commandFound = false;
+
+    for (const token of tokens) {
+        const escapedToken = escapeHtml(token);
+        if (/^\s+$/.test(token)) {
+            html += escapedToken;
+        } else {
+            if (!commandFound) {
+                html += `<span class="cmd-highlight">${escapedToken}</span>`;
+                commandFound = true;
+            } else if (token.startsWith('-')) {
+                html += `<span class="comment-highlight">${escapedToken}</span>`;
+            } else {
+                html += escapedToken;
+            }
+        }
+    }
+    if (commentPart) {
+        html += `<span class="comment-highlight">${escapeHtml(commentPart)}</span>`;
+    }
+    return html;
+}
+
+/**
+ * 创建或更新 ~/.startrc 文件。
+ * @param {string|null} content - 要写入文件的内容。如果为null，则使用默认内容。
+ */
+async function createOrUpdateStartrcFile(content = null) {
+  let fileContent = content;
+  if (fileContent === null) {
+    // 默认配置
+    fileContent = `
+# Welcome to your .startrc file!
+# This file is for configuring your terminal on startup.
+# Lines starting with # or // are comments.
+
+welcome
+
+# Enable Command Highlighting. Default: off
+# syntax off
+
+# Set the visual theme. Supported: default, ubuntu, powershell, cmd, kali, debian
+theme ubuntu
+
+# Set the cursor style. Supported: block, bar, underline
+cursor block
+
+# Define command aliases. Use quotes for commands with spaces.
+alias ll='ls -l -a'
+alias g='google'
+
+# Set environment variables. Quotes are optional for simple values.
+export GREETING="Hello from .startrc!"
+export EDITOR=nano
+
+# You can also print messages on startup.
+echo ".startrc loaded successfully."
+    `.trim();
+  }
+  
+  const existingRc = await findFileInHome('.startrc');
+  if (existingRc) {
+    await new Promise(resolve => chrome.bookmarks.remove(existingRc.id, resolve));
+  }
+  const dataUrl = `about:blank#${encodeURIComponent(fileContent)}`;
+  await new Promise(resolve => chrome.bookmarks.create({ parentId: homeDirNode.id, title: '.startrc', url: dataUrl }, resolve));
+}
+
+// script.js
+function pauseBlinking() {
+  isBlinkingPaused = true;
+  blockCursor.classList.add('no-blink');
+  updateInputDisplay(); // 强制重绘以应用静态样式
+
+  clearTimeout(blinkTimeout);
+  blinkTimeout = setTimeout(() => {
+    isBlinkingPaused = false;
+    blockCursor.classList.remove('no-blink');
+    updateInputDisplay(); // 强制重绘以恢复动画
+  }, 1000);
+}
+
+/**
+ * 解析并应用 .startrc 文件的配置。 (修复后版本)
+ * @param {string} scriptContent - 从 .startrc 文件读取的配置内容。
+ */
+async function parseAndApplyStartrc(scriptContent) {
+  const lines = scriptContent.split('\n');
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // --- 修复1: 同时支持 '#' 和 '//' 作为注释 ---
+    if (trimmedLine === '' || trimmedLine.startsWith('#') || trimmedLine.startsWith('//')) {
+      continue;
+    }
+
+    const tokens = trimmedLine.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    const command = tokens.shift();
+    const args = tokens; // args 现在是包含引号的完整参数
+
+    switch (command) {
+      case 'welcome':
+        await commands.welcome.exec(); // 调用 welcome 命令
+        break;
+
+      case 'syntax':
+        const mode = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (mode === 'on') {
+          syntaxHighlightingEnabled = true;
+        } else if (mode === 'off') {
+          syntaxHighlightingEnabled = false;
+        }
+        break;
+
+      case 'theme':
+        const themeArg = args[0]?.replace(/^['"]|['"]$/g, '');
+        if (themeArg === 'light' || themeArg === 'dark') {
+            backgroundModeAuto = false; // .startrc 中手动指定
+            applyBackgroundMode(themeArg);
+        } else if (SUPPORTED_THEMES.includes(themeArg)) {
+            backgroundModeAuto = true; // .startrc 中使用主题，则为自动模式
+            applyTheme(themeArg);
+        } else {
+            print(`[.startrc] Invalid theme or mode: '${themeArg}'`, 'error');
+        }
+        break;
+
+      case 'about':
+        const options = {};
+        const aboutArgs = [];
+        args.forEach(arg => {
+          if (arg.startsWith('-')) { // 简单处理 -v, -V 这样的选项
+            for (const char of arg.substring(1)) options[char] = true;
+          } else {
+            aboutArgs.push(arg);
+          }
+        });
+        commands.about.exec(aboutArgs, options); // 调用 about 命令
+        break;
+
+      // case 'theme':
+      //   const themeName = args[0]?.replace(/^['"]|['"]$/g, '');
+      //   if (SUPPORTED_THEMES.includes(themeName)) {
+      //     applyTheme(themeName);
+      //   } else {
+      //     print(`[.startrc] Invalid theme: '${themeName}'`, 'error');
+      //   }
+      //   break;
+      
+      case 'cursor':
+        const supportedCursors = ['block', 'bar', 'underline'];
+        if (supportedCursors.includes(args[0])) {
+          applyCursorStyle(args[0]);
+        } else {
+          print(`[.startrc] Invalid cursor style: '${args[0]}'`, 'error');
+        }
+        break;
+
+      case 'alias':
+      case 'export':
+        const assignmentString = args.join(' ');
+        const match = assignmentString.match(/^([^=]+)=(.*)$/);
+        
+        if (match) {
+          const key = match[1];
+          // 去除值部分两端的引号
+          let value = match[2].trim().replace(/^['"]|['"]$/g, '');
+          
+          if (command === 'alias') {
+            aliases[key] = value;
+          } else {
+            environmentVars[key] = value;
+          }
+        } else {
+          print(`[.startrc] Invalid ${command} syntax: ${trimmedLine}`, 'error');
+        }
+        break;
+      
+      case 'echo':
+        // 去除参数两端的引号后打印
+        const echoMessage = args.map(arg => arg.replace(/^['"]|['"]$/g, '')).join(' ');
+        print(echoMessage);
+        break;
+
+      default:
+        print(`[.startrc] Unknown command: '${command}'`, 'error');
+        break;
+    }
+  }
+
+  await setSetting('aliases', aliases);
+  await setSetting('environmentVars', environmentVars);
+  await setSetting('syntaxHighlighting', syntaxHighlightingEnabled);
+  await setSetting('backgroundMode', backgroundMode);
+  await setSetting('backgroundModeAuto', backgroundModeAuto);
+
+}
+
+/**
+ * 在主目录中查找一个文件（非文件夹）。
+ * @param {string} fileName - 要查找的文件名。
+ * @returns {object|null} 返回书签节点或 null。
+ */
+async function findFileInHome(fileName) {
+    if (!homeDirNode || !homeDirNode.children) {
+        const tree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+        if (tree && tree[0] && tree[0].children && tree[0].children[0]) {
+            homeDirNode = tree[0].children[0];
+        } else {
+            return null;
+        }
+    }
+    return (homeDirNode.children || []).find(child => child.title === fileName && !child.children);
+}
+
+async function loadSettings() {
+  // 1. 获取完整的书签树
+  const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
+  root = bookmarkTree[0];
+  homeDirNode = (root.children && root.children.length > 0) ? root.children[0] : root;
   current = homeDirNode;
   path = [root, homeDirNode];
 
-  // 2. Load configuration mode first
-  const configData = await chrome.storage.sync.get(['configMode', 'autosyncEnabled']);
-  configMode = configData.configMode || 'storage';
+  // 2. 首先加载配置模式
+  const configData = await new Promise(resolve => chrome.storage.sync.get(['configMode', 'autosyncEnabled'], resolve));
+  configMode = configData.configMode || 'storage'; // 默认为 'storage'
   autosyncEnabled = configData.autosyncEnabled || false;
 
-  // 3. Load all settings using the getSetting router, which respects configMode
-  aliases = await getSetting('aliases') || {};
-  environmentVars = await getSetting('environmentVars') || {};
-  promptTheme = await getSetting('theme') || 'default';
-  
-  const loadedSettings = await getSetting('settings');
-  if (loadedSettings) {
+  backgroundModeAuto = await getSetting('backgroundModeAuto') ?? true;
+
+  if (configMode === 'storage' || configMode === 'bookmark') {
+    welcomeMsg();
+    setTimeout(() => { // 使用 setTimeout 确保提示信息在欢迎信息之后显示，更显眼
+      print("", "info"); // 添加一个空行以作分隔
+      print("[Notice] A new, more powerful configuration system '.startrc' is available.", "highlight");
+      print(`         You are currently using '${configMode}' mode.`, "info");
+      print("         Run 'config setup startrc' to switch to run control mode.", "hint");
+      print("", "info");
+    }, 100); // 延迟100毫秒显示
+  }
+
+  // 3. 根据配置模式执行不同的加载逻辑
+  if (configMode === 'startrc') {
+    // --- .startrc 模式加载逻辑 ---
+    const rcFile = await findFileInHome('.startrc');
+    if (rcFile && rcFile.url) {
+      try {
+        const scriptContent = decodeURIComponent(rcFile.url.split('#')[1] || '');
+        await parseAndApplyStartrc(scriptContent); // <<< 调用新的解析器
+      } catch (e) {
+        print(`Error reading .startrc file: ${e.message}`, 'error');
+      }
+    } else {
+      print("Warning: .startrc file not found. Using default settings.", 'warning');
+      print("Hint: Run 'config setup startrc' to create one.", 'hint');
+    }
+    // 在.startrc模式下，设置一个默认值以防脚本未配置
+    applyTheme(promptTheme || 'default');
+    applyCursorStyle(cursorStyle || 'block');
+
+  } else {
+    // --- 旧模式 (storage/bookmark) 的加载逻辑 ---
+    aliases = await getSetting('aliases') || {};
+    environmentVars = await getSetting('environmentVars') || {};
+    promptTheme = await getSetting('theme') || 'default';
+    const loadedSettings = await getSetting('settings');
+    if (loadedSettings) {
       default_mode = loadedSettings.default_mode ?? false;
       default_search_engine = loadedSettings.default_search_engine ?? "google";
-  } else {
-      default_mode = false;
-      default_search_engine = "google";
+    }
+    const loadedCursorStyle = await getSetting('cursorStyle');
+    applyCursorStyle(loadedCursorStyle || 'block');
+    applyTheme(promptTheme);
   }
-  
-  const loadedCursorStyle = await getSetting('cursorStyle');
-  applyCursorStyle(loadedCursorStyle || 'block');
 
 
   // 4. Load other non-routable settings directly from storage
-  const data = await chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion']);
+  const data = await new Promise(resolve => chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion'], resolve));
   
   if (data.commandHistory) {
     previousCommands.push(...data.commandHistory);
+  }
+
+  const loadedBgMode = await getSetting('backgroundMode') ?? 'dark';
+  applyBackgroundMode(loadedBgMode);
+  if (!backgroundModeAuto) {
+    applyBackgroundMode(loadedBgMode);
   }
 
   // 5. Restore last used bookmark path
@@ -3173,6 +4039,7 @@ async function loadSettings() {
     applyBackground(null, promptOpacity); // Apply default background
   }
 
+  syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
 }
 
@@ -3192,7 +4059,7 @@ function typingIO_cursor() {
   // after 2 seconds, re-enable blinking
   setTimeout(() => {
     blockCursor.classList.remove('no-blink');
-  }, 100);
+  }, 1000);
 }
 
 // in script.js, can be placed near other helper functions
@@ -3211,51 +4078,54 @@ document.body.addEventListener("keydown", async e => {
     if (activeEditor === 'nano') {
         // For nano, we only intercept our specific shortcuts.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-    e.preventDefault();
-    editorStatus.textContent = "Saving...";
-    
-    // const targetBookmarkNode = findChildByTitleFileOrDir(current.children || [], editorTitleInput.value) || {id: editingBookmarkId};
-    const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
+      e.preventDefault();
+      editorStatus.textContent = "Saving...";
+      
+      const isStartrcFile = editingBookmarkTitle === '.startrc';
+      const isSettingsFile = current.title === SETTINGS_FOLDER_NAME && CONFIG_KEYS.includes(editingBookmarkTitle);
 
-    let updatePayload;
+      let updatePayload;
 
-    if (isSettingsFile) {
-        // --- NEW SAVE LOGIC for settings files ---
+      // --- NANO .startrc 绿灯保存逻辑 ---
+      if (isStartrcFile) {
+        const content = document.getElementById('editor-textarea').value;
+        const dataUrl = `about:blank#${encodeURIComponent(content)}`;
+        updatePayload = { url: dataUrl }; // 只更新URL
+      
+      } else if (isSettingsFile) {
         const textarea = document.getElementById('editor-textarea');
         try {
-            // Validate JSON before saving
             const parsedJson = JSON.parse(textarea.value);
-            const stringifiedJson = JSON.stringify(parsedJson); // Minified for URL
+            const stringifiedJson = JSON.stringify(parsedJson);
             const dataUrl = `about:blank#${encodeURIComponent(stringifiedJson)}`;
-            updatePayload = { url: dataUrl }; // Only update the URL
+            updatePayload = { url: dataUrl };
         } catch (err) {
             editorStatus.textContent = `Error: Invalid JSON! ${err.message}`;
             return;
         }
-    } else {
-        // --- ORIGINAL SAVE LOGIC for regular bookmarks ---
-        updatePayload = {
-            title: editorTitleInput.value,
-            url: editorUrlInput.value
-        };
-    }
 
-    chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
-        if (chrome.runtime.lastError) {
-            editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
-        } else {
-            editorStatus.textContent = `Saved: ${updatedNode.title}`;
-            unsavedChanges = false;
-            // If title was changed, update nano's state
-            if (updatePayload.title) editorTitleInput.value = updatePayload.title;
-            editingBookmarkId = updatedNode.id; // Update ID in case it changes (rare)
-            
-            // Silently refresh the current directory's children
-            chrome.bookmarks.getSubTree(current.id, (results) => {
-                if (results && results[0]) current = results[0];
-            });
-        }
-      });
+      } else {
+          // --- 原始保存逻辑 ---
+          updatePayload = {
+              title: editorTitleInput.value,
+              url: editorUrlInput.value
+          };
+      }
+
+      chrome.bookmarks.update(editingBookmarkId, updatePayload, (updatedNode) => {
+          if (chrome.runtime.lastError) {
+              editorStatus.textContent = `Error: ${chrome.runtime.lastError.message}`;
+          } else {
+              editorStatus.textContent = `Saved: ${updatedNode.title}`;
+              unsavedChanges = false;
+              if (updatePayload.title) editorTitleInput.value = updatePayload.title;
+              editingBookmarkId = updatedNode.id;
+              
+              chrome.bookmarks.getSubTree(current.id, (results) => {
+                  if (results && results[0]) current = results[0];
+              });
+          }
+        });
     } else if (e.ctrlKey && e.key.toLowerCase() === 'x') {
             e.preventDefault();
             exitEditor();
@@ -3386,6 +4256,7 @@ document.body.addEventListener("keydown", async e => {
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking();
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -3397,6 +4268,7 @@ document.body.addEventListener("keydown", async e => {
     clearSuggestions(); 
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking();
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -3425,11 +4297,13 @@ document.body.addEventListener("keydown", async e => {
           case 'a': // Move to beginning of line
               e.preventDefault();
               cursorPosition = 0;
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'e': // Move to end of line
               e.preventDefault();
               cursorPosition = buffer.length;
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'u': // Delete from cursor to start of line
@@ -3438,6 +4312,7 @@ document.body.addEventListener("keydown", async e => {
                   yankBuffer = buffer.substring(0, cursorPosition);
                   buffer = buffer.substring(cursorPosition);
                   cursorPosition = 0;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -3445,6 +4320,7 @@ document.body.addEventListener("keydown", async e => {
               e.preventDefault();
               yankBuffer = buffer.substring(cursorPosition);
               buffer = buffer.substring(0, cursorPosition);
+              pauseBlinking(); // Pause blinking when moving cursor
               updateInputDisplay();
               return;
           case 'w': // Delete word before cursor
@@ -3481,6 +4357,7 @@ document.body.addEventListener("keydown", async e => {
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
                   cursorPosition = prevWordPos;
+                  pauseBlinking();
                   updateInputDisplay();
               }
               return;
@@ -3492,6 +4369,7 @@ document.body.addEventListener("keydown", async e => {
                   while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
                   while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
                   cursorPosition = nextWordPos;
+                  pauseBlinking();
                   updateInputDisplay();
               }
               return;
@@ -3507,6 +4385,7 @@ document.body.addEventListener("keydown", async e => {
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] === ' ') prevWordPos--;
                   while (prevWordPos > 0 && buffer[prevWordPos - 1] !== ' ') prevWordPos--;
                   cursorPosition = prevWordPos;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -3517,6 +4396,7 @@ document.body.addEventListener("keydown", async e => {
                   while (nextWordPos < buffer.length && buffer[nextWordPos] !== ' ') nextWordPos++;
                   while (nextWordPos < buffer.length && buffer[nextWordPos] === ' ') nextWordPos++;
                   cursorPosition = nextWordPos;
+                  pauseBlinking(); // Pause blinking when moving cursor
                   updateInputDisplay();
               }
               return;
@@ -3552,6 +4432,7 @@ document.body.addEventListener("keydown", async e => {
     if (!isComposing && cursorPosition > 0) {
       e.preventDefault();
       cursorPosition--;
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
     return;
@@ -3561,6 +4442,7 @@ document.body.addEventListener("keydown", async e => {
     if (!isComposing && cursorPosition < buffer.length) {
       e.preventDefault();
       cursorPosition++;
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
     return;
@@ -3724,6 +4606,7 @@ if (e.key === "Tab") {
       buffer = buffer.substring(0, cursorPosition - 1) + buffer.substring(cursorPosition);
       cursorPosition--;
       typingIO_cursor();
+      pauseBlinking(); // Pause blinking when moving cursor
       updateInputDisplay();
     }
   } else if (e.key === "Enter") {
@@ -3746,6 +4629,7 @@ if (e.key === "Tab") {
   } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
     e.preventDefault();
     typingIO_cursor();
+    pauseBlinking(); // Pause blinking when typing
     buffer = buffer.substring(0, cursorPosition) + e.key + buffer.substring(cursorPosition);
     cursorPosition++;
     updateInputDisplay();
@@ -4009,11 +4893,19 @@ function redrawAllLinesOnResize() {
 window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
 window.onload = async () => {
+
+  terminal.addEventListener('dragstart', (e) => {
+    // 1. 阻止浏览器默认的拖拽行为
+    e.preventDefault();
+    // 2. 立刻清空当前的文字选择
+    // window.getSelection().removeAllRanges();
+  });
+
   // No explicit body focus, let browser decide or user click.
   // typedText.focus() will be called by done() or click handler.
   updateCharacterWidth(); // Initial calculation
   await loadSettings(); // Load settings and user info
-  welcomeMsg();
+  // welcomeMsg();
   // updateInputDisplay(); // Called by done()
   done(); // Initial setup of prompt and input display
 };
@@ -4061,8 +4953,22 @@ document.body.addEventListener("click", function(event) {
 function applyTheme(themeName) {
     document.body.className = `theme-${themeName}`;
     promptTheme = themeName;
-    applyCursorStyle(cursorStyle); // Reapply cursor style to ensure it matches the theme
+
+    // --- 新增：如果处于自动模式，则根据主题自动切换 light/dark ---
+    if (backgroundModeAuto) {
+        const newMode = THEME_MODES[themeName] || 'dark';
+        applyBackgroundMode(newMode);
+    }
+
+    applyCursorStyle(cursorStyle);
     saveTheme();
+}
+
+function applyBackgroundMode(mode) {
+    if (mode !== 'light' && mode !== 'dark') return;
+    document.body.classList.remove('light-mode', 'dark-mode');
+    document.body.classList.add(`${mode}-mode`);
+    backgroundMode = mode;
 }
 
 function applyCursorStyle(style) {
