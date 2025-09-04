@@ -1870,16 +1870,27 @@ DESCRIPTION
                 }
 
                 print(`Fetching plugin '${pluginName}'...`);
-                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
+                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.json?t=${Date.now()}`); // <<< 修正行
                 if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
-                const code = await response.text();
-                
+                const pluginConfig = await response.json(); // <<< 将 .text() 改为 .json()
+
                 const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+                // 存储整个JSON对象，而不是代码字符串
                 installed_plugins[pluginName] = {
                     version: plugin_cache[pluginName].version,
                     description: plugin_cache[pluginName].description,
-                    code: code
+                    config: pluginConfig // <<< 将 code 改为 config
                 };
+                // if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
+                // const code = await response.text();
+                
+                // const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+                // installed_plugins[pluginName] = {
+                //     version: plugin_cache[pluginName].version,
+                //     description: plugin_cache[pluginName].description,
+                //     code: code
+                // };
 
                 await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
                 print(`Plugin '${pluginName}' installed successfully.`, "success");
@@ -4159,21 +4170,55 @@ async function loadSettings() {
 
   // Plugins
   const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+const pluginCommands = {};
 
-    for (const name in installed_plugins) {
-        try {
-            const plugin = installed_plugins[name];
-            // 使用 new Function 在沙箱化的全局作用域中执行插件代码
-            const runPlugin = new Function(plugin.code);
-            runPlugin();
-        } catch (e) {
-            print(`Error loading plugin '${name}': ${e.message}`, 'error');
+for (const name in installed_plugins) {
+    try {
+        const plugin = installed_plugins[name];
+        if (!plugin.config || !plugin.config.commands) continue;
+
+        const config = plugin.config;
+
+        // 打印加载消息
+        if (config.onLoadMessage) {
+            print(config.onLoadMessage.text, config.onLoadMessage.type || 'success');
         }
+
+        // 解释并生成命令
+        for (const cmdName in config.commands) {
+            const cmdConfig = config.commands[cmdName];
+            let execFunc;
+
+            switch (cmdConfig.type) {
+                case 'alias':
+                    execFunc = () => cmdConfig.exec;
+                    break;
+                case 'alias_with_args':
+                    execFunc = (args) => {
+                        const argString = args.join(' ');
+                        // 将 $* 替换为参数，并处理引号
+                        return cmdConfig.exec.replace('"$*"', `"${argString.replace(/"/g, '\\"')}"`)
+                                             .replace('$*', argString);
+                    };
+                    break;
+                default:
+                    console.warn(`Unknown plugin command type: ${cmdConfig.type} for ${cmdName}`);
+                    continue; // 跳过不支持的类型
+            }
+            
+            pluginCommands[cmdName] = {
+                exec: execFunc,
+                manual: cmdConfig.manual || `No manual entry for plugin command '${cmdName}'.`,
+                isPlugin: true
+            };
+        }
+    } catch (e) {
+        print(`Error loading plugin '${name}': ${e.message}`, 'error');
     }
-    
-    // 将插件注册的命令合并到主 commands 对象中
-    // 这会覆盖任何同名的内置命令，允许插件进行扩展
-    Object.assign(commands, TerminalAPI._pluginCommands);
+}
+
+// 将插件生成的命令合并到主 commands 对象中
+Object.assign(commands, pluginCommands);
 
   syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
