@@ -96,8 +96,9 @@ let homeDirNode = null;
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.2";
-const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+const PRIVACY_POLICY_VERSION = "1.3";
+// const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+const PRIVACY_POLICY_URL = "https://doc.tianyibrad.com/en/documentation/Start-Terminal/privacy-policy";
 
 // Some related links
 const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
@@ -110,6 +111,9 @@ const PLUGIN_REPO_URL = "https://raw.githubusercontent.com/BradleyBao/Start-Term
 
 let sandboxFrame;
 const pluginCommandNames = new Set();
+
+// Password Mode 
+let isPasswordMode = false; 
 
 const TerminalAPI = {
     _pluginCommands: {},
@@ -162,6 +166,30 @@ function get_fav(bookmarks) {
 
   update_user_path();
 };
+
+function userInputModePassword(query) {
+    user_input_content = "";
+    return new Promise((resolve) => {
+        isPasswordMode = true; // 激活密码模式
+        input_mode = true;
+        awaiting();
+        promptSymbol.style.display = "inline-block";
+        promptSymbol.textContent = query;
+
+        const intervalId = setInterval(() => {
+            // 在密码模式下，我们等待用户按下Enter键
+            // 实际的密码保存在 buffer 中，显示的是星号
+            if (!input_mode) { // 当Enter键将 input_mode 设为 false 时
+                clearInterval(intervalId);
+                isPasswordMode = false; // 退出密码模式
+                const password = user_input_content; // user_input_content 会被Enter键逻辑赋值
+                user_input_content = ""; // 清理
+                buffer = "";
+                resolve(password);
+            }
+        }, 50);
+    });
+}
 
 // function update_user_path() {
 //   let displayPath;
@@ -1717,16 +1745,117 @@ DESCRIPTION
       // return "File picker opened. Please select an image.";
   },
 
-  setbgAPI: (args) => {
-    const arg = args[0];
-    // Check if it is the link 
-    if (arg && (arg.startsWith("http://") || arg.startsWith("https://"))) {
-        promptBgRandomAPI = arg;
-        chrome.storage.sync.set({ imgAPI: promptBgRandomAPI });
-        print(`Background image API set to ${arg}.`, "success");
-        return;
-    }
-  },
+  setbgAPI: {
+    exec: async (args) => {
+        const action = args.shift() || 'show';
+
+        switch (action) {
+            case 'config': {
+                awaiting();
+                print("--- Background API Configuration Wizard ---", "highlight");
+                
+                let endpoint = await userInputMode("Enter API Endpoint URL: ");
+                endpoint = user_input_content;
+                print(`Enter API Endpoint URL: ${endpoint}`);
+
+                let method = await userInputMode("Enter Method (GET/POST): ");
+                method = user_input_content.toUpperCase();
+                print(`Enter Method (GET/POST): ${method}`);
+                if (method !== 'GET' && method !== 'POST') {
+                    print("Invalid method. Aborting.", "error");
+                    done(); return;
+                }
+
+                let responsePath = await userInputMode("Enter Response Path for image URL (e.g., data.url): ");
+                responsePath = user_input_content;
+                print(`Enter Response Path for image URL (e.g., data.url): ${responsePath}`);
+
+                let headers = await userInputMode("Enter Headers (JSON format, e.g., {}): ");
+                headers = user_input_content;
+                print(`Enter Headers (JSON format, e.g., {}): [hidden]`);
+                
+                let params = await userInputMode("Enter URL Params (JSON format, e.g., {}): ");
+                params = user_input_content;
+                print(`Enter URL Params (JSON format, e.g., {}): [hidden]`);
+
+                let jsonBody = "{}";
+                if (method === 'POST') {
+                    jsonBody = await userInputMode("Enter JSON Body (JSON format, e.g., {}): ");
+                    print(`Enter JSON Body (JSON format, e.g., {}): [hidden]`);
+                }
+                
+                // 使用新的密码输入模式
+                const apiKey = await userInputModePassword("Enter API Key (optional, hidden): ");
+                print("Enter API Key (optional, hidden): *********");
+
+                try {
+                    const config = {
+                        endpoint,
+                        method,
+                        responsePath,
+                        headers: JSON.parse(headers),
+                        params: JSON.parse(params),
+                        jsonBody: JSON.parse(jsonBody)
+                    };
+
+                    await setSetting('bgAPIConfig', config);
+                    if (apiKey) {
+                        await setSetting('secret_bgAPIKey', apiKey);
+                    } else {
+                        await new Promise(resolve => chrome.storage.sync.remove('secret_bgAPIKey', resolve));
+                    }
+                    print("API configuration saved successfully!", "success");
+                } catch (e) {
+                    print(`Error: Invalid JSON provided. ${e.message}`, "error");
+                }
+                done();
+                return;
+            }
+
+            case 'show': {
+                const config = await getSetting('bgAPIConfig');
+                const apiKey = await getSetting('secret_bgAPIKey');
+                if (!config) return "No custom background API configured. Use 'setbgAPI config'.";
+
+                print("--- Current Background API Config ---", "highlight");
+                print(`Endpoint: ${config.endpoint}`);
+                print(`Method:   ${config.method}`);
+                print(`Path:     ${config.responsePath}`);
+                print(`API Key:  ${apiKey ? '******** (Set)' : '(Not set)'}`);
+                return;
+            }
+
+            case 'clear': {
+                await new Promise(resolve => chrome.storage.sync.remove(['bgAPIConfig', 'secret_bgAPIKey'], resolve));
+                return "Custom background API configuration cleared.";
+            }
+
+            default:
+                return "Usage: setbgAPI <config|show|clear>";
+        }
+    },
+    suggestions: (args) => {
+      if (args.length <= 1) return ['config', 'show', 'clear'];
+      return [];
+    },
+    manual: `NAME
+  setbgAPI - configure a custom API for random backgrounds
+
+SYNOPSIS
+  setbgAPI [config|show|clear]
+
+DESCRIPTION
+  Manages the external API used for fetching background images.
+
+  config
+    Starts an interactive wizard to set up the API endpoint, method, response path, and API key.
+
+  show
+    Displays the current API configuration (with the key masked).
+
+  clear
+    Removes the custom API configuration.`
+},
   tree: (args, options) => {
     print(current.title || "~");
     if (current.children && current.children.length > 0) {
@@ -3930,11 +4059,18 @@ echo ".startrc loaded successfully."
 
 // script.js
 function pauseBlinking() {
+
+  if (isPasswordMode) {
+    return;
+  }
+  
   isBlinkingPaused = true;
   blockCursor.classList.add('no-blink');
+  
   updateInputDisplay(); // 强制重绘以应用静态样式
 
   clearTimeout(blinkTimeout);
+
   blinkTimeout = setTimeout(() => {
     isBlinkingPaused = false;
     blockCursor.classList.remove('no-blink');
@@ -4211,7 +4347,23 @@ async function loadSettings() {
   // 8. Load and apply background settings
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
   applyTheme(promptTheme); // Apply theme loaded via getSetting
-  
+  const bgApiConfig = await getSetting('bgAPIConfig');
+if (!bgApiConfig) {
+    print("Applying default background API settings for the first time.", "info");
+    
+    const defaultConfig = {
+        endpoint: 'https://boringapi.com/api/v1/photos/random?num=1',
+        method: 'GET',
+        responsePath: 'photos.0.url',
+        headers: {},
+        params: {},
+        jsonBody: {}
+    };
+    
+    // 保存这套默认配置
+    await setSetting('bgAPIConfig', defaultConfig);
+    // 我们不需要设置API Key，因为它默认为空
+}
   if (data.imgAPI) promptBgRandomAPI = data.imgAPI;
   promptOpacity = data.background_opacity || 0.15;
   
@@ -4430,9 +4582,22 @@ document.body.addEventListener("keydown", async e => {
   // IO operations
 
   // Stop cusor blinking when typing
-
   // if user input mode 
   if (input_mode) {
+    if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+        print(promptSymbol.textContent + buffer + "^C"); // 在当前行打印^C以示中断
+        print("Input cancelled.", "warning");
+        
+        user_input_content = ""; // 将结果设为null，以告知调用者操作已被取消
+        input_mode = false;        // 关闭输入模式，这将 resolve Promise
+        isPasswordMode = false;    // 同时确保退出密码模式
+        buffer = "";
+        cursorPosition = 0;
+        
+        done(); // 恢复正常的命令提示符
+        return; // 中断后续按键处理
+    }
+
     if (e.key === "Backspace") {
     e.preventDefault();
     if (cursorPosition > 0) {
@@ -4442,12 +4607,22 @@ document.body.addEventListener("keydown", async e => {
       cursorPosition--;
       typingIO_cursor();
       pauseBlinking();
-      updateInputDisplay();
+      // updateInputDisplay();
+      if (isPasswordMode) {
+        typedText.textContent = '';         // 1. 不显示任何字符
+        blockCursor.style.display = 'none'; // 2. 隐藏光标
+        return;
+      }
+      return;
     }
   } else if (e.key === "Enter") {
     clearSuggestions(); 
     e.preventDefault();
+    input_mode = false;
     user_input_content = buffer;
+    buffer = "";
+    cursorPosition = 0;
+    return;
 
   } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     clearSuggestions(); 
@@ -4458,7 +4633,14 @@ document.body.addEventListener("keydown", async e => {
     cursorPosition++;
     updateInputDisplay();
   }
-    return 
+  if (isPasswordMode) {
+        typedText.textContent = '';         // 1. 不显示任何字符
+        blockCursor.style.display = 'none'; // 2. 隐藏光标
+        return;
+    } else {
+        // updateInputDisplay(); // 对于普通输入模式，使用常规的显示更新
+    }
+    
   }
   
 
@@ -4817,7 +4999,7 @@ if (e.key === "Tab") {
     updateInputDisplay();
 
     executeLine(commandToProcess);
-  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !input_mode) {
     e.preventDefault();
     typingIO_cursor();
     pauseBlinking(); // Pause blinking when typing
@@ -4977,6 +5159,7 @@ function interrupt() {
   if (commanding) {
     commanding = false; // Set flag to stop async loops like ping
     // Output for ^C is handled by the command itself or keydown handler
+    // If in input mode, we handle ^C differently
     print("^C", "warning");
     done(); // Restore prompt and input display
   }
@@ -5207,18 +5390,92 @@ function saveEnvironmentVars() {
   setSetting('environmentVars', environmentVars);
 }
 
-function applyBackground(imageDataUrl, opacity) {
-    if (imageDataUrl) {
-        backgroundContainer.style.backgroundImage = `url(${imageDataUrl})`;
-        backgroundContainer.style.opacity = opacity;
-        promptOpacity = opacity;
-    } else {
-        // Apply default background or clear it
-        // backgroundContainer.style.backgroundImage = `url('https://pic.re/image')`;
-        // backgroundContainer.style.backgroundImage = `url('https://rpic.origz.com/api.php?category=pixiv')`;
-        backgroundContainer.style.backgroundImage = `url('${promptBgRandomAPI}')`;
-        backgroundContainer.style.opacity = promptOpacity;
+// script.js (可以放在 applyBackground 函数附近)
+
+/**
+ * A helper to safely get a nested value from an object using a dot-notation string.
+ * @param {object} obj The object to query.
+ * @param {string} path The dot-notation path (e.g., 'data.images[0].url').
+ * @returns The value, or undefined if not found.
+ */
+function getValueFromPath(obj, path) {
+    if (!path) return undefined;
+    return path.split(/[.\[\]]+/).filter(Boolean).reduce((o, k) => (o || {})[k], obj);
+}
+
+/**
+ * Fetches an image URL from the configured custom API.
+ * @returns {Promise<string|null>} The image URL or null if failed.
+ */
+async function fetchImageFromCustomAPI() {
+    const config = await getSetting('bgAPIConfig');
+    if (!config) return null;
+
+    try {
+        const apiKey = await getSetting('secret_bgAPIKey');
+        const url = new URL(config.endpoint);
+        
+        // 1. 添加 URL 参数
+        Object.entries(config.params).forEach(([key, value]) => {
+            url.searchParams.append(key, value);
+        });
+
+        // 2. 准备 fetch 选项
+        const fetchOptions = {
+            method: config.method,
+            headers: new Headers(config.headers || {}),
+        };
+
+        // 注入 API Key (如果存在) - 常见于 'Authorization' 头
+        if (apiKey && fetchOptions.headers.has('Authorization')) {
+            const authHeader = fetchOptions.headers.get('Authorization').replace('{api_key}', apiKey);
+            fetchOptions.headers.set('Authorization', authHeader);
+        }
+
+        if (config.method === 'POST') {
+            fetchOptions.headers.set('Content-Type', 'application/json');
+            fetchOptions.body = JSON.stringify(config.jsonBody);
+        }
+
+        // 3. 发起请求
+        const response = await fetch(url, fetchOptions);
+        if (!response.ok) {
+            throw new Error(`API responded with status ${response.status}`);
+        }
+        const data = await response.json();
+
+        // 4. 解析并返回图片链接
+        const imageUrl = getValueFromPath(data, config.responsePath);
+        if (typeof imageUrl !== 'string') {
+            throw new Error(`Image URL not found at path: ${config.responsePath}`);
+        }
+        return imageUrl;
+
+    } catch (e) {
+        print(`Custom API Error: ${e.message}`, 'error');
+        return null; // 返回 null 以便回退到默认背景
     }
+}
+
+async function applyBackground(imageDataUrl, opacity) {
+    let finalImageUrl = imageDataUrl;
+
+    if (!finalImageUrl) {
+        // 如果没有提供图片，则尝试从API获取
+        const customApiUrl = await fetchImageFromCustomAPI();
+        if (customApiUrl) {
+            finalImageUrl = customApiUrl;
+        } else {
+            // 如果自定义API失败或未配置，则使用默认的简单API
+            finalImageUrl = promptBgRandomAPI;
+        }
+    }
+
+    if (finalImageUrl) {
+        backgroundContainer.style.backgroundImage = `url(${finalImageUrl})`;
+        backgroundContainer.style.opacity = opacity;
+    }
+    promptOpacity = opacity;
 }
 
 function handleFileSelect(event) {
