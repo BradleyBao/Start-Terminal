@@ -21,7 +21,8 @@
     "downloads.open"],
   "host_permissions": [
     "https://login.microsoftonline.com/*",
-    "https://graph.microsoft.com/*"
+    "https://graph.microsoft.com/*",
+    "https://raw.githubusercontent.com/BradleyBao/Start-Terminal/main/start-terminal-bookmark-extension/plugins/*"
   ],
   "sandbox": {
     "pages": ["sandbox.html"]
