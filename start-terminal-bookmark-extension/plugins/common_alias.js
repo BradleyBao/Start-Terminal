@@ -36,6 +36,6 @@
     }
 
     // Add an info 
-    TerminalAPI.print("Common Aliases plugin loaded, "success");
+    TerminalAPI.print("Common Aliases plugin loaded", "success");
 
 })();
