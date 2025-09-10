@@ -1960,119 +1960,258 @@ DESCRIPTION
   mslogout: () => {
     logoutWithMicrosoft();
   },
-  apt: async (args) => {
-    const action = args.shift() || 'list';
+  // script.js -> const commands = { ... };
 
-    switch (action) {
-        case 'update':
-            awaiting();
-            print("Updating package list from repository...");
-            try {
-                const response = await fetch(`${PLUGIN_REPO_URL}index.json?t=${Date.now()}`); // 添加时间戳防止缓存
-                if (!response.ok) throw new Error(`Failed to fetch index (status: ${response.status})`);
-                const repoIndex = await response.json();
-                
-                // 将仓库索引缓存到本地存储
-                await new Promise(resolve => chrome.storage.local.set({ plugin_cache: repoIndex }, resolve));
-                
-                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-                
-                print("Package index updated successfully.", "success");
-                print("Available packages:", "highlight");
-                for (const name in repoIndex) {
-                    const status = installed_plugins[name] ? '(installed)' : '(available)';
-                    const indicator = installed_plugins[name] ? 'Hit:' : 'Get:';
-                    print(`  ${indicator} ${name} ${status}`, installed_plugins[name] ? 'info' : 'success');
+// script.js -> const commands = { ... };
+
+apt: {
+    // 1. 将原有的执行逻辑放入 'exec' 属性中
+    exec: async (args, options) => {
+        const action = args.shift() || 'list';
+        
+        const { plugin_cache: repoIndex } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+        const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+        switch (action) {
+            case 'update': {
+                awaiting();
+                print("Updating package list from repository...");
+                try {
+                    const response = await fetch(`${PLUGIN_REPO_URL}index.json?t=${Date.now()}`);
+                    if (!response.ok) throw new Error(`Failed to fetch index (status: ${response.status})`);
+                    const freshRepoIndex = await response.json();
+                    
+                    await new Promise(resolve => chrome.storage.local.set({ plugin_cache: freshRepoIndex }, resolve));
+                    
+                    print("Package index updated successfully.", "success");
+                    print("Package status:", "highlight");
+
+                    let upgradableCount = 0;
+
+                    // 遍历远程索引中的所有插件
+                    for (const name in freshRepoIndex) {
+                        const remotePlugin = freshRepoIndex[name];
+                        const localPlugin = installed_plugins[name];
+
+                        if (localPlugin) {
+                            // 如果插件已安装，则检查版本
+                            if (isVersionNewer(remotePlugin.version, localPlugin.version)) {
+                                const line = `  Hit: ${name} [<span class="output-warning">${localPlugin.version}</span> -> <span class="output-success">${remotePlugin.version}</span>]`;
+                                print(line, 'info', true);
+                                upgradableCount++;
+                            } else {
+                                // 已安装且是最新版本
+                                print(`  Hit: ${name} [installed <span class="output-success">v${localPlugin.version}</span>]`, 'info', true);
+                            }
+                        } else {
+                            // 如果插件未安装
+                            print(`  Get: ${name} [available <span class="output-info">v${remotePlugin.version}</span>]`, 'info', true);
+                        }
+                    }
+
+                    print(""); // 添加一个空行
+                    if (upgradableCount > 0) {
+                        print(`${upgradableCount} package(s) can be upgraded.`, "highlight");
+                        print("Run 'apt list --upgradable' to see them or 'apt upgrade' to install all updates.", "hint");
+                    } else {
+                        print("All packages are up to date.", "success");
+                    }
+
+                } catch (e) {
+                    print(`Error updating package list: ${e.message}`, "error");
                 }
-            } catch (e) {
-                print(`Error updating package list: ${e.message}`, "error");
-            }
-            done();
-            return;
-
-        case 'install': {
-            const pluginName = args[0];
-            if (!pluginName) return "Usage: apt install <plugin_name>";
-            
-            awaiting();
-            try {
-                const { plugin_cache } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
-                if (!plugin_cache || !plugin_cache[pluginName]) {
-                    throw new Error("Package not found in cache. Please run 'apt update' first.");
-                }
-
-                print(`Fetching plugin '${pluginName}'...`);
-                const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
-                if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
-                const code = await response.text();
-                
-                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-                installed_plugins[pluginName] = {
-                    version: plugin_cache[pluginName].version,
-                    description: plugin_cache[pluginName].description,
-                    code: code
-                };
-
-                await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
-                print(`Plugin '${pluginName}' installed successfully.`, "success");
-                print("Please restart the terminal (reload the page) to activate the new commands.", "warning");
-
-            } catch (e) {
-                print(`Error installing '${pluginName}': ${e.message}`, "error");
-            }
-            done();
-            return;
-        }
-
-        case 'purge':
-        case 'remove': {
-            const pluginName = args[0];
-            if (!pluginName) return `Usage: apt ${action} <plugin_name>`;
-
-            awaiting();
-            const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-            if (!installed_plugins[pluginName]) {
-                print(`Plugin '${pluginName}' is not installed.`, "warning");
-            } else {
-                delete installed_plugins[pluginName];
-                await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
-                print(`Plugin '${pluginName}' has been purged.`, "success");
-                print("Please restart the terminal (reload the page) to apply changes.", "warning");
-            }
-            done();
-            return;
-        }
-
-        case 'list': {
-            awaiting();
-            const { plugin_cache } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
-            const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
-
-            if (!plugin_cache) {
-                print("Package cache is empty. Please run 'apt update'.", "warning");
                 done();
                 return;
             }
 
-            print("Available Packages from Repository:", "highlight");
-            for (const name in plugin_cache) {
-                const plugin = plugin_cache[name];
-                let status = '[available]';
-                if (installed_plugins[name]) {
-                    status = `[installed v${installed_plugins[name].version}]`;
+            case 'list': {
+                if (!repoIndex) return "Package cache is empty. Please run 'apt update'.";
+
+                // 处理 --upgradable 选项
+                if (options.upgradable) {
+                    print("Listing upgradable packages...", "highlight");
+                    let count = 0;
+                    for (const name in installed_plugins) {
+                        if (repoIndex[name] && isVersionNewer(repoIndex[name].version, installed_plugins[name].version)) {
+                            print(`  - ${name} (${installed_plugins[name].version} -> ${repoIndex[name].version})`);
+                            count++;
+                        }
+                    }
+                    if (count === 0) {
+                        print("All packages are up to date.");
+                    }
+                    return;
                 }
-                print(`  ${name.padEnd(20, ' ')} ${status} - ${plugin.description}`);
+
+                // 默认的 list 行为
+                print("Available Packages from Repository:", "highlight");
+                for (const name in repoIndex) {
+                    const plugin = repoIndex[name];
+                    let status = '[available]';
+                    if (installed_plugins[name]) {
+                        status = `[installed v${installed_plugins[name].version}]`;
+                    }
+                    print(`  ${name.padEnd(20, ' ')} ${status} - ${plugin.description}`);
+                }
+                return;
             }
-            done();
-            return;
+
+            case 'install': {
+                const pluginName = args[0];
+                if (!pluginName) return "Usage: apt install <plugin_name> [--only-upgrade]";
+                if (!repoIndex || !repoIndex[pluginName]) return `Error: Plugin '${pluginName}' not found. Run 'apt update' first.`;
+                
+                const isInstalled = !!installed_plugins[pluginName];
+                if (options['only-upgrade'] && !isInstalled) {
+                    return `Plugin '${pluginName}' is not installed. Nothing to upgrade.`;
+                }
+
+                awaiting();
+                print(isInstalled ? `Reinstalling '${pluginName}' with latest version...` : `Installing '${pluginName}'...`);
+                
+                const success = await installPlugin(pluginName, repoIndex);
+                if (success) {
+                    print(`Plugin '${pluginName}' processed successfully.`, "success");
+                    print("Please restart the terminal (reload the page) to apply changes.", "warning");
+                }
+                done();
+                return;
+            }
+
+            case 'upgrade': {
+                if (!repoIndex) return "Package index is empty. Please run 'apt update' first.";
+                awaiting();
+                print("Checking for upgrades...");
+                const upgradesToInstall = [];
+                for (const name in installed_plugins) {
+                    if (repoIndex[name] && isVersionNewer(repoIndex[name].version, installed_plugins[name].version)) {
+                        print(`  - ${name} can be upgraded from ${installed_plugins[name].version} to ${repoIndex[name].version}`, "info");
+                        upgradesToInstall.push(name);
+                    }
+                }
+
+                if (upgradesToInstall.length === 0) {
+                    print("All installed plugins are up to date.", "success");
+                    done();
+                    return;
+                }
+
+                print(`\n${upgradesToInstall.length} plugins will be upgraded.`, "highlight");
+                for (const name of upgradesToInstall) {
+                    await installPlugin(name, repoIndex);
+                }
+                
+                print("\nUpgrade process finished.", "success");
+                print("Please restart the terminal (reload the page) to apply all changes.", "warning");
+                done();
+                return;
+            }
+
+            case 'show': {
+                const pluginName = args[0];
+                if (!pluginName) return "Usage: apt show <plugin_name>";
+                
+                const repoInfo = repoIndex ? repoIndex[pluginName] : null;
+                const installedInfo = installed_plugins[pluginName];
+
+                if (!repoInfo && !installedInfo) return `Error: Plugin '${pluginName}' not found.`;
+
+                print(`--- Info for plugin: ${pluginName} ---`, "highlight");
+                print(`Version:      ${repoInfo ? repoInfo.version : 'N/A'}`);
+                print(`Description:  ${repoInfo ? repoInfo.description : '(No description available)'}`);
+                if (installedInfo) {
+                    print(`Status:       Installed (v${installedInfo.version})`, "success");
+                } else {
+                    print(`Status:       Available`, "info");
+                }
+                return;
+            }
+
+            case 'purge':
+            case 'remove': {
+                const pluginName = args[0];
+                if (!pluginName) return `Usage: apt ${action} <plugin_name>`;
+
+                awaiting();
+                if (!installed_plugins[pluginName]) {
+                    print(`Plugin '${pluginName}' is not installed.`, "warning");
+                } else {
+                    delete installed_plugins[pluginName];
+                    await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+                    print(`Plugin '${pluginName}' has been purged.`, "success");
+                    print("Please restart the terminal (reload the page) to apply changes.", "warning");
+                }
+                done();
+                return;
+            }
+
+
+            default:
+                return "Usage: apt <update|install|upgrade|purge|list|show> [plugin_name]";
+        }
+    },
+
+    manual: `NAME
+  apt - Advanced Package Tool for terminal add-ons
+
+SYNOPSIS
+  apt <command> [arguments] [--option]
+
+DESCRIPTION
+  apt is a command-line tool for managing terminal plugins.
+
+COMMANDS
+  update
+    Downloads the latest list of available plugins from the official repository.
+
+  list
+    Shows all available plugins from the last 'update', and indicates which ones are currently installed.
+
+  install <plugin_name>
+    Downloads and installs a new plugin. If the plugin is already installed, it will be reinstalled with the latest version.
+    --only-upgrade  -  Upgrade the package only if it is already installed.
+
+  upgrade
+    Upgrades all installed plugins to their latest available versions. Requires 'apt update' to be run first.
+
+  purge <plugin_name>
+    Completely removes a plugin. 'remove' is an alias for 'purge'.
+  
+  show <plugin_name>
+    Shows detailed information about a plugin, such as its version and description.`,
+
+    suggestions: async (args) => {
+        const subCommand = args[0];
+
+        console.log(args.length);
+
+        // 如果用户正在输入第一个参数（即子命令），则提示所有可用的子命令
+        if (args.length <= 1) {
+            return ['update', 'install', 'upgrade', 'purge', 'remove', 'list', 'show'];
         }
 
-        default:
-            return "Usage: apt <update|install|purge|list> [plugin_name]";
+        if (args.length === 2) {
+            // 对于 purge, remove, 和 show，提示已安装的插件
+            if (['purge', 'remove', 'show'].includes(subCommand)) {
+                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+                return Object.keys(installed_plugins);
+            }
+
+            if (subCommand === 'install') {
+                const { plugin_cache: repoIndex } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+                return repoIndex ? Object.keys(repoIndex) : [];
+            }
+        }
+
+        // 其他情况不提供建议
+        return [];
     }
 },
-// 你可以保留 apt-get 作为 apt 的别名
-'apt-get': (args) => commands.apt(args),
+'apt-get': {
+    exec: (args, options) => commands.apt.exec(args, options),
+    manual: () => commands.apt.manual,
+    suggestions: (args) => commands.apt.suggestions(args)
+},
   history: {
     exec: () => {
         if (previousCommands.length === 0) return ["No history yet."];
@@ -3531,7 +3670,53 @@ async function executePipeline(pipelineStr) {
     activeGrepPattern = null; // Reset grep pattern after processing the pipeline
 }
 
-// in script.js, add this new helper function
+/**
+ * Compares two semantic version strings.
+ * @param {string} remoteVersion e.g., "1.10.0"
+ * @param {string} localVersion e.g., "1.2.0"
+ * @returns {boolean} True if remoteVersion is newer than localVersion.
+ */
+function isVersionNewer(remoteVersion, localVersion) {
+    if (!remoteVersion || !localVersion) return false;
+    const remoteParts = remoteVersion.split('.').map(Number);
+    const localParts = localVersion.split('.').map(Number);
+    const len = Math.max(remoteParts.length, localParts.length);
+    for (let i = 0; i < len; i++) {
+        const remote = remoteParts[i] || 0;
+        const local = localParts[i] || 0;
+        if (remote > local) return true;
+        if (remote < local) return false;
+    }
+    return false; // Versions are identical
+}
+
+/**
+ * Installs or updates a single plugin.
+ * @param {string} pluginName The name of the plugin to install.
+ * @param {object} repoIndex The repository index from the cache.
+ * @returns {Promise<boolean>} True if installation was successful.
+ */
+async function installPlugin(pluginName, repoIndex) {
+    try {
+        print(`Fetching plugin '${pluginName}' v${repoIndex[pluginName].version}...`);
+        const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
+        if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
+        const code = await response.text();
+
+        const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+        installed_plugins[pluginName] = {
+            version: repoIndex[pluginName].version,
+            description: repoIndex[pluginName].description,
+            code: code
+        };
+
+        await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+        return true;
+    } catch (e) {
+        print(`Error processing '${pluginName}': ${e.message}`, "error");
+        return false;
+    }
+}
 
 /**
  * Checks if a command requires sudo and if it was used correctly.
@@ -4857,10 +5042,54 @@ if (e.key === "Tab") {
 
     const relevantInput = buffer.substring(0, cursorPosition);
     const parts = relevantInput.trimStart().split(/\s+/);
-    const commandName = parts[0] || "";
-    const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
 
-    // --- PRIORITY 1: Sub-command/Argument Completion ---
+    let commandName;
+    let commandArgs;
+    let isSudo = false;
+    let baseCommandParts; // 用于重建字符串
+
+    if (parts[0].toLowerCase() === 'sudo' && parts.length >= 2) {
+        isSudo = true;
+        commandName = parts[1] || "";
+        commandArgs = parts.slice(2);
+        baseCommandParts = parts.slice(0, 2); // e.g., ["sudo", "apt"]
+    } else {
+        commandName = parts[0] || "";
+        commandArgs = parts.slice(1);
+        baseCommandParts = parts.slice(0, 1); // e.g., ["apt"]
+    }
+
+    const commandDef = commands[commandName];
+    const isTypingFirstWord = (!isSudo && parts.length === 1 && !relevantInput.endsWith(' ')) || (isSudo && parts.length === 2 && !relevantInput.endsWith(' '));
+
+    // const commandName = parts[0] || "";
+    // const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
+
+    if (!isTypingFirstWord && commandDef && typeof commandDef === 'object' && commandDef.suggestions) {
+        const suggestionResult = await commandDef.suggestions(commandArgs);
+        
+        if (suggestionResult && suggestionResult.length > 0) {
+            const argToComplete = relevantInput.endsWith(' ') ? "" : commandArgs[commandArgs.length - 1] || "";
+            const matches = suggestionResult.filter(s => s.toLowerCase().startsWith(argToComplete.toLowerCase()));
+
+            if (matches.length === 1) {
+                const completedArgs = [...commandArgs];
+                completedArgs[commandArgs.length - 1] = matches[0];
+                
+                const newText = baseCommandParts.join(' ') + " " + completedArgs.join(" ").trim() + " ";
+                buffer = newText + buffer.substring(cursorPosition);
+                cursorPosition = newText.length;
+                updateInputDisplay();
+
+            } else if (matches.length > 1) {
+                suggestionsContainer.textContent = matches.join("   ");
+                suggestionsContainer.style.display = "block";
+            }
+            return; // 参数补全已处理，退出
+        }
+    }
+
+    // --- Sub-command/Argument Completion ---
     // Check if we are typing arguments for a command that has a suggestion engine.
     if (!isTypingFirstWord) {
         const commandDef = commands[commandName];
