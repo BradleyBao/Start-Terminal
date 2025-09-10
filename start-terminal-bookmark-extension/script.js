@@ -96,7 +96,7 @@ let homeDirNode = null;
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.3";
+const PRIVACY_POLICY_VERSION = "1.3"; 
 const PRIVACY_POLICY_URL = "https://doc.tianyibrad.com/en/documentation/Start-Terminal/privacy-policy";
 
 // Some related links
