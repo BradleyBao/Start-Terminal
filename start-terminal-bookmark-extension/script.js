@@ -96,15 +96,15 @@ let homeDirNode = null;
 let full_path = null;
 
 // Function to add privacy policy version 
-const PRIVACY_POLICY_VERSION = "1.2";
-const PRIVACY_POLICY_URL = "https://www.tianyibrad.com/docs/start_terminal_privacy_policy";
+const PRIVACY_POLICY_VERSION = "1.3";
+const PRIVACY_POLICY_URL = "https://doc.tianyibrad.com/en/documentation/Start-Terminal/privacy-policy";
 
 // Some related links
 const GITHUB_REPO_URL = "https://github.com/BradleyBao/Start-Terminal"
 const STORE_URL = "https://microsoftedge.microsoft.com/addons/detail/start-terminal/pkaikemmelhclbkndohcoffnenhhhihp"
 const REPORT = "https://aka.bradleyproject.eu.org/sterminal_report"
 const FEEDBACK = "https://aka.bradleyproject.eu.org/sterminal_feedback"
-const UPDATE_LOG = "https://www.tianyibrad.com/pages/start-terminal-update-log"
+const UPDATE_LOG = "https://doc.tianyibrad.com/en/documentation/Start-Terminal/whatsnew"
 
 // chrome.bookmarks.getTree(bookmarkTree => {
 //   get_fav(bookmarkTree);
