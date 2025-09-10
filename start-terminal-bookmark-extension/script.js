@@ -124,6 +124,14 @@ const start_terminal_ascii = [
 "                                                             "
 ].join("\n");
 
+// Sandbox 
+let sandboxFrame; 
+const pluginCommandNames = new Set();
+const PLUGIN_REPO_URL = "https://raw.githubusercontent.com/BradleyBao/Start-Terminal/main/start-terminal-bookmark-extension/plugins/";
+
+
+// Password Mode 
+let isPasswordMode = false; 
 
 
 function get_fav(bookmarks) {
@@ -133,6 +141,30 @@ function get_fav(bookmarks) {
 
   update_user_path();
 };
+
+function userInputModePassword(query) {
+    user_input_content = "";
+    return new Promise((resolve) => {
+        isPasswordMode = true; // 激活密码模式
+        input_mode = true;
+        awaiting();
+        promptSymbol.style.display = "inline-block";
+        promptSymbol.textContent = query;
+
+        const intervalId = setInterval(() => {
+            // 在密码模式下，我们等待用户按下Enter键
+            // 实际的密码保存在 buffer 中，显示的是星号
+            if (!input_mode) { // 当Enter键将 input_mode 设为 false 时
+                clearInterval(intervalId);
+                isPasswordMode = false; // 退出密码模式
+                const password = user_input_content; // user_input_content 会被Enter键逻辑赋值
+                user_input_content = ""; // 清理
+                buffer = "";
+                resolve(password);
+            }
+        }, 50);
+    });
+}
 
 // function update_user_path() {
 //   let displayPath;
@@ -1396,16 +1428,117 @@ DESCRIPTION
       // return "File picker opened. Please select an image.";
   },
 
-  setbgAPI: (args) => {
-    const arg = args[0];
-    // Check if it is the link 
-    if (arg && (arg.startsWith("http://") || arg.startsWith("https://"))) {
-        promptBgRandomAPI = arg;
-        chrome.storage.sync.set({ imgAPI: promptBgRandomAPI });
-        print(`Background image API set to ${arg}.`, "success");
-        return;
-    }
-  },
+  setbgAPI: {
+    exec: async (args) => {
+        const action = args.shift() || 'show';
+
+        switch (action) {
+            case 'config': {
+                awaiting();
+                print("--- Background API Configuration Wizard ---", "highlight");
+                
+                let endpoint = await userInputMode("Enter API Endpoint URL: ");
+                endpoint = user_input_content;
+                print(`Enter API Endpoint URL: ${endpoint}`);
+
+                let method = await userInputMode("Enter Method (GET/POST): ");
+                method = user_input_content.toUpperCase();
+                print(`Enter Method (GET/POST): ${method}`);
+                if (method !== 'GET' && method !== 'POST') {
+                    print("Invalid method. Aborting.", "error");
+                    done(); return;
+                }
+
+                let responsePath = await userInputMode("Enter Response Path for image URL (e.g., data.url): ");
+                responsePath = user_input_content;
+                print(`Enter Response Path for image URL (e.g., data.url): ${responsePath}`);
+
+                let headers = await userInputMode("Enter Headers (JSON format, e.g., {}): ");
+                headers = user_input_content;
+                print(`Enter Headers (JSON format, e.g., {}): [hidden]`);
+                
+                let params = await userInputMode("Enter URL Params (JSON format, e.g., {}): ");
+                params = user_input_content;
+                print(`Enter URL Params (JSON format, e.g., {}): [hidden]`);
+
+                let jsonBody = "{}";
+                if (method === 'POST') {
+                    jsonBody = await userInputMode("Enter JSON Body (JSON format, e.g., {}): ");
+                    print(`Enter JSON Body (JSON format, e.g., {}): [hidden]`);
+                }
+                
+                // 使用新的密码输入模式
+                const apiKey = await userInputModePassword("Enter API Key (optional, hidden): ");
+                print("Enter API Key (optional, hidden): *********");
+
+                try {
+                    const config = {
+                        endpoint,
+                        method,
+                        responsePath,
+                        headers: JSON.parse(headers),
+                        params: JSON.parse(params),
+                        jsonBody: JSON.parse(jsonBody)
+                    };
+
+                    await setSetting('bgAPIConfig', config);
+                    if (apiKey) {
+                        await setSetting('secret_bgAPIKey', apiKey);
+                    } else {
+                        await new Promise(resolve => chrome.storage.sync.remove('secret_bgAPIKey', resolve));
+                    }
+                    print("API configuration saved successfully!", "success");
+                } catch (e) {
+                    print(`Error: Invalid JSON provided. ${e.message}`, "error");
+                }
+                done();
+                return;
+            }
+
+            case 'show': {
+                const config = await getSetting('bgAPIConfig');
+                const apiKey = await getSetting('secret_bgAPIKey');
+                if (!config) return "No custom background API configured. Use 'setbgAPI config'.";
+
+                print("--- Current Background API Config ---", "highlight");
+                print(`Endpoint: ${config.endpoint}`);
+                print(`Method:   ${config.method}`);
+                print(`Path:     ${config.responsePath}`);
+                print(`API Key:  ${apiKey ? '******** (Set)' : '(Not set)'}`);
+                return;
+            }
+
+            case 'clear': {
+                await new Promise(resolve => chrome.storage.sync.remove(['bgAPIConfig', 'secret_bgAPIKey'], resolve));
+                return "Custom background API configuration cleared.";
+            }
+
+            default:
+                return "Usage: setbgAPI <config|show|clear>";
+        }
+    },
+    suggestions: (args) => {
+      if (args.length <= 1) return ['config', 'show', 'clear'];
+      return [];
+    },
+    manual: `NAME
+  setbgAPI - configure a custom API for random backgrounds
+
+SYNOPSIS
+  setbgAPI [config|show|clear]
+
+DESCRIPTION
+  Manages the external API used for fetching background images.
+
+  config
+    Starts an interactive wizard to set up the API endpoint, method, response path, and API key.
+
+  show
+    Displays the current API configuration (with the key masked).
+
+  clear
+    Removes the custom API configuration.`
+},
   tree: (args, options) => {
     print(current.title || "~");
     if (current.children && current.children.length > 0) {
@@ -1502,36 +1635,254 @@ DESCRIPTION
     commanding = true;
     logoutWithGoogle();
   },
-  apt: (args) => {
-    if (args.length === 0) {
-      return;
+  apt: {
+    // 1. 将原有的执行逻辑放入 'exec' 属性中
+    exec: async (args, options) => {
+        const action = args.shift() || 'list';
+        
+        const { plugin_cache: repoIndex } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+        const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+        switch (action) {
+            case 'update': {
+                awaiting();
+                print("Updating package list from repository...");
+                try {
+                    const response = await fetch(`${PLUGIN_REPO_URL}index.json?t=${Date.now()}`);
+                    if (!response.ok) throw new Error(`Failed to fetch index (status: ${response.status})`);
+                    const freshRepoIndex = await response.json();
+                    
+                    await new Promise(resolve => chrome.storage.local.set({ plugin_cache: freshRepoIndex }, resolve));
+                    
+                    print("Package index updated successfully.", "success");
+                    print("Package status:", "highlight");
+
+                    let upgradableCount = 0;
+
+                    // 遍历远程索引中的所有插件
+                    for (const name in freshRepoIndex) {
+                        const remotePlugin = freshRepoIndex[name];
+                        const localPlugin = installed_plugins[name];
+
+                        if (localPlugin) {
+                            // 如果插件已安装，则检查版本
+                            if (isVersionNewer(remotePlugin.version, localPlugin.version)) {
+                                const line = `  Hit: ${name} [<span class="output-warning">${localPlugin.version}</span> -> <span class="output-success">${remotePlugin.version}</span>]`;
+                                print(line, 'info', true);
+                                upgradableCount++;
+                            } else {
+                                // 已安装且是最新版本
+                                print(`  Hit: ${name} [installed <span class="output-success">v${localPlugin.version}</span>]`, 'info', true);
+                            }
+                        } else {
+                            // 如果插件未安装
+                            print(`  Get: ${name} [available <span class="output-info">v${remotePlugin.version}</span>]`, 'info', true);
+                        }
+                    }
+
+                    print(""); // 添加一个空行
+                    if (upgradableCount > 0) {
+                        print(`${upgradableCount} package(s) can be upgraded.`, "highlight");
+                        print("Run 'apt list --upgradable' to see them or 'apt upgrade' to install all updates.", "hint");
+                    } else {
+                        print("All packages are up to date.", "success");
+                    }
+
+                } catch (e) {
+                    print(`Error updating package list: ${e.message}`, "error");
+                }
+                done();
+                return;
+            }
+
+            case 'list': {
+                if (!repoIndex) return "Package cache is empty. Please run 'apt update'.";
+
+                // 处理 --upgradable 选项
+                if (options.upgradable) {
+                    print("Listing upgradable packages...", "highlight");
+                    let count = 0;
+                    for (const name in installed_plugins) {
+                        if (repoIndex[name] && isVersionNewer(repoIndex[name].version, installed_plugins[name].version)) {
+                            print(`  - ${name} (${installed_plugins[name].version} -> ${repoIndex[name].version})`);
+                            count++;
+                        }
+                    }
+                    if (count === 0) {
+                        print("All packages are up to date.");
+                    }
+                    return;
+                }
+
+                // 默认的 list 行为
+                print("Available Packages from Repository:", "highlight");
+                for (const name in repoIndex) {
+                    const plugin = repoIndex[name];
+                    let status = '[available]';
+                    if (installed_plugins[name]) {
+                        status = `[installed v${installed_plugins[name].version}]`;
+                    }
+                    print(`  ${name.padEnd(20, ' ')} ${status} - ${plugin.description}`);
+                }
+                return;
+            }
+
+            case 'install': {
+                const pluginName = args[0];
+                if (!pluginName) return "Usage: apt install <plugin_name> [--only-upgrade]";
+                if (!repoIndex || !repoIndex[pluginName]) return `Error: Plugin '${pluginName}' not found. Run 'apt update' first.`;
+                
+                const isInstalled = !!installed_plugins[pluginName];
+                if (options['only-upgrade'] && !isInstalled) {
+                    return `Plugin '${pluginName}' is not installed. Nothing to upgrade.`;
+                }
+
+                awaiting();
+                print(isInstalled ? `Reinstalling '${pluginName}' with latest version...` : `Installing '${pluginName}'...`);
+                
+                const success = await installPlugin(pluginName, repoIndex);
+                if (success) {
+                    print(`Plugin '${pluginName}' processed successfully.`, "success");
+                    print("Please restart the terminal (reload the page) to apply changes.", "warning");
+                }
+                done();
+                return;
+            }
+
+            case 'upgrade': {
+                if (!repoIndex) return "Package index is empty. Please run 'apt update' first.";
+                awaiting();
+                print("Checking for upgrades...");
+                const upgradesToInstall = [];
+                for (const name in installed_plugins) {
+                    if (repoIndex[name] && isVersionNewer(repoIndex[name].version, installed_plugins[name].version)) {
+                        print(`  - ${name} can be upgraded from ${installed_plugins[name].version} to ${repoIndex[name].version}`, "info");
+                        upgradesToInstall.push(name);
+                    }
+                }
+
+                if (upgradesToInstall.length === 0) {
+                    print("All installed plugins are up to date.", "success");
+                    done();
+                    return;
+                }
+
+                print(`\n${upgradesToInstall.length} plugins will be upgraded.`, "highlight");
+                for (const name of upgradesToInstall) {
+                    await installPlugin(name, repoIndex);
+                }
+                
+                print("\nUpgrade process finished.", "success");
+                print("Please restart the terminal (reload the page) to apply all changes.", "warning");
+                done();
+                return;
+            }
+
+            case 'show': {
+                const pluginName = args[0];
+                if (!pluginName) return "Usage: apt show <plugin_name>";
+                
+                const repoInfo = repoIndex ? repoIndex[pluginName] : null;
+                const installedInfo = installed_plugins[pluginName];
+
+                if (!repoInfo && !installedInfo) return `Error: Plugin '${pluginName}' not found.`;
+
+                print(`--- Info for plugin: ${pluginName} ---`, "highlight");
+                print(`Version:      ${repoInfo ? repoInfo.version : 'N/A'}`);
+                print(`Description:  ${repoInfo ? repoInfo.description : '(No description available)'}`);
+                if (installedInfo) {
+                    print(`Status:       Installed (v${installedInfo.version})`, "success");
+                } else {
+                    print(`Status:       Available`, "info");
+                }
+                return;
+            }
+
+            case 'purge':
+            case 'remove': {
+                const pluginName = args[0];
+                if (!pluginName) return `Usage: apt ${action} <plugin_name>`;
+
+                awaiting();
+                if (!installed_plugins[pluginName]) {
+                    print(`Plugin '${pluginName}' is not installed.`, "warning");
+                } else {
+                    delete installed_plugins[pluginName];
+                    await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+                    print(`Plugin '${pluginName}' has been purged.`, "success");
+                    print("Please restart the terminal (reload the page) to apply changes.", "warning");
+                }
+                done();
+                return;
+            }
+
+
+            default:
+                return "Usage: apt <update|install|upgrade|purge|list|show> [plugin_name]";
+        }
+    },
+
+    manual: `NAME
+  apt - Advanced Package Tool for terminal add-ons
+
+SYNOPSIS
+  apt <command> [arguments] [--option]
+
+DESCRIPTION
+  apt is a command-line tool for managing terminal plugins.
+
+COMMANDS
+  update
+    Downloads the latest list of available plugins from the official repository.
+
+  list
+    Shows all available plugins from the last 'update', and indicates which ones are currently installed.
+
+  install <plugin_name>
+    Downloads and installs a new plugin. If the plugin is already installed, it will be reinstalled with the latest version.
+    --only-upgrade  -  Upgrade the package only if it is already installed.
+
+  upgrade
+    Upgrades all installed plugins to their latest available versions. Requires 'apt update' to be run first.
+
+  purge <plugin_name>
+    Completely removes a plugin. 'remove' is an alias for 'purge'.
+  
+  show <plugin_name>
+    Shows detailed information about a plugin, such as its version and description.`,
+
+    suggestions: async (args) => {
+        const subCommand = args[0];
+
+        // console.log(args.length);
+
+        // 如果用户正在输入第一个参数（即子命令），则提示所有可用的子命令
+        if (args.length <= 1) {
+            return ['update', 'install', 'upgrade', 'purge', 'remove', 'list', 'show'];
+        }
+
+        if (args.length === 2) {
+            // 对于 purge, remove, 和 show，提示已安装的插件
+            if (['purge', 'remove', 'show'].includes(subCommand)) {
+                const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+                return Object.keys(installed_plugins);
+            }
+
+            if (subCommand === 'install') {
+                const { plugin_cache: repoIndex } = await new Promise(resolve => chrome.storage.local.get('plugin_cache', resolve));
+                return repoIndex ? Object.keys(repoIndex) : [];
+            }
+        }
+
+        // 其他情况不提供建议
+        return [];
     }
-    let arg = args[0];
-    if (arg == "update") {
-      awaiting();
-      commanding = true;
-      checkForUpdates();
-    } else if (arg == "upgrade") {
-      awaiting();
-      commanding = true;
-      applyUpdates();
-    }
-  },
-  "apt-get": (args) => {
-    if (args.length === 0) {
-      return;
-    }
-    let arg = args[0];
-    if (arg == "update") {
-      awaiting();
-      commanding = true;
-      checkForUpdates();
-    } else if (arg == "upgrade") {
-      awaiting();
-      commanding = true;
-      applyUpdates();
-    }
-  },
+},
+'apt-get': {
+    exec: (args, options) => commands.apt.exec(args, options),
+    manual: () => commands.apt.manual,
+    suggestions: (args) => commands.apt.suggestions(args)
+},
   history: {
     exec: () => {
         if (previousCommands.length === 0) return ["No history yet."];
@@ -2878,9 +3229,14 @@ async function executePipeline(pipelineStr) {
 
         const { command, args, options } = parsed;
         const commandDef = commands[command];
-        const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
 
-        if (action) {
+        // console.log(`[Main] Executing: '${command}'. Is it a known plugin command?`, pluginCommandNames.has(command));
+        
+
+        if (commandDef) {
+          const action = (typeof commandDef === 'function') ? commandDef : commandDef?.exec; // Handle both old and new format
+
+          if (action) {
 
             let result;
             if (!isLastInPipe) {
@@ -2890,6 +3246,15 @@ async function executePipeline(pipelineStr) {
             }
 
             result = await Promise.resolve(action(args, options, previousOutput, isLastInPipe));
+
+            if (commandDef && commandDef.isPlugin && typeof result === 'string') {
+                print(`> ${result}`, "hint"); // 显示插件别名展开后的命令
+                // 将插件返回的字符串作为新命令再次执行
+                // 注意：这里是一个递归调用思想的简化版，只处理一层别名
+                await executePipeline(result); 
+                result = null; // 清空结果，因为我们已经执行了新命令
+            }
+
             previousOutput = result;
 
             if (isPiping) {
@@ -2915,21 +3280,106 @@ async function executePipeline(pipelineStr) {
         } else {
              if (isLastInPipe) {
                 if (default_mode) {
-                    const query = finalCommand; // 整个无法识别的输入都作为查询
-                    const disposition = options.b ? "NEW_TAB" : "CURRENT_TAB";
+                    const defaultAction = commands[default_search_engine];
+                    if (defaultAction) {
+                        defaultAction([command, ...args], options);
+                    }
+                } else {
+                    print(`Unknown command: '${command}'`, "error");
+                }
+            }
+            previousOutput = null;
+        }
+
+        } else if (pluginCommandNames.has(command)) {
+            // 将执行请求委托给沙箱
+            sandboxFrame.contentWindow.postMessage({
+                type: 'run_plugin_command',
+                name: command,
+                args: args
+            }, '*');
+            previousOutput = null; // 插件是异步的，不直接参与管道传递
+        } 
+        // --------------------------------------------------------------------
+        // 分支 C：未知命令 / 默认搜索
+        // --------------------------------------------------------------------
+        else {
+            if (isLastInPipe) {
+                if (default_mode) {
+                    const query = finalCommand;
+
+                    // == 如果是 Edge 版本, 使用这段逻辑 ==
+                    // const defaultAction = commands[default_search_engine];
+                    // if (defaultAction) {
+                    //     saveSearchHistory(query);
+                    //     defaultAction([query], options);
+                    // }
+
+                    // == 如果是 Chrome 版本, 使用这段逻辑 (更推荐) ==
+                    saveSearchHistory(query);
+                    chrome.search.query({ text: query, disposition: options.b ? "NEW_TAB" : "CURRENT_TAB" });
                     
-                    chrome.search.query({ text: query, disposition: disposition });
                 } else {
                     print(`Unknown command: '${command}' (try 'help')`, "error");
                 }
             }
-            previousOutput = null; // 在管道中中断
+            previousOutput = null; // 未知命令，中断管道
         }
+
+        
     }
     activeGrepPattern = null; // Reset grep pattern after processing the pipeline
 }
 
-// in script.js, add this new helper function
+
+/**
+ * Compares two semantic version strings.
+ * @param {string} remoteVersion e.g., "1.10.0"
+ * @param {string} localVersion e.g., "1.2.0"
+ * @returns {boolean} True if remoteVersion is newer than localVersion.
+ */
+function isVersionNewer(remoteVersion, localVersion) {
+    if (!remoteVersion || !localVersion) return false;
+    const remoteParts = remoteVersion.split('.').map(Number);
+    const localParts = localVersion.split('.').map(Number);
+    const len = Math.max(remoteParts.length, localParts.length);
+    for (let i = 0; i < len; i++) {
+        const remote = remoteParts[i] || 0;
+        const local = localParts[i] || 0;
+        if (remote > local) return true;
+        if (remote < local) return false;
+    }
+    return false; // Versions are identical
+}
+
+/**
+ * Installs or updates a single plugin.
+ * @param {string} pluginName The name of the plugin to install.
+ * @param {object} repoIndex The repository index from the cache.
+ * @returns {Promise<boolean>} True if installation was successful.
+ */
+async function installPlugin(pluginName, repoIndex) {
+    try {
+        print(`Fetching plugin '${pluginName}' v${repoIndex[pluginName].version}...`);
+        const response = await fetch(`${PLUGIN_REPO_URL}${pluginName}.js?t=${Date.now()}`);
+        if (!response.ok) throw new Error(`Could not download plugin (status: ${response.status})`);
+        const code = await response.text();
+
+        const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+        installed_plugins[pluginName] = {
+            version: repoIndex[pluginName].version,
+            description: repoIndex[pluginName].description,
+            code: code
+        };
+
+        await new Promise(resolve => chrome.storage.sync.set({ installed_plugins }, resolve));
+        return true;
+    } catch (e) {
+        print(`Error processing '${pluginName}': ${e.message}`, "error");
+        return false;
+    }
+}
+
 
 /**
  * Checks if a command requires sudo and if it was used correctly.
@@ -3612,6 +4062,24 @@ async function findFileInHome(fileName) {
     return (homeDirNode.children || []).find(child => child.title === fileName && !child.children);
 }
 
+async function loadAndInitPlugins() {
+    // console.log("[Main] Starting to load plugins...");
+    const { installed_plugins = {} } = await new Promise(resolve => chrome.storage.sync.get('installed_plugins', resolve));
+
+    for (const name in installed_plugins) {
+        const plugin = installed_plugins[name];
+        if (plugin.code) {
+            // console.log(`[Main] Sending plugin code for '${name}' to sandbox.`);
+            // 将插件代码发送到沙箱去执行
+            sandboxFrame.contentWindow.postMessage({
+                type: 'load_plugin',
+                name: name,
+                code: plugin.code
+            }, '*');
+        }
+    }
+}
+
 async function loadSettings() {
   // 1. 获取完整的书签树
   const bookmarkTree = await new Promise(resolve => chrome.bookmarks.getTree(resolve));
@@ -3665,7 +4133,7 @@ async function loadSettings() {
     const loadedSettings = await getSetting('settings');
     if (loadedSettings) {
       default_mode = loadedSettings.default_mode ?? false;
-      // default_search_engine = loadedSettings.default_search_engine ?? "google"; // <<< 已移除
+      default_search_engine = loadedSettings.default_search_engine ?? "google";
     }
     const loadedCursorStyle = await getSetting('cursorStyle');
     applyCursorStyle(loadedCursorStyle || 'block');
@@ -3674,8 +4142,7 @@ async function loadSettings() {
 
 
   // 4. Load other non-routable settings directly from storage
-
-  const data = await new Promise(resolve => chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion', 'gAuth', 'activeLogin'], resolve));  
+  const data = await new Promise(resolve => chrome.storage.sync.get(['commandHistory', 'msAuth', 'bookmarkPath', 'background_opacity', 'imgAPI', 'privacyPolicyVersion'], resolve));
   
   if (data.commandHistory) {
     previousCommands.push(...data.commandHistory);
@@ -3709,11 +4176,16 @@ async function loadSettings() {
     }
   }
 
-  // 6. Handle Google Account session
-  // Handle Google Account session
-  if (data.activeLogin === 'google' && data.gAuth && data.gAuth.userInfo) {
-      user = data.gAuth.userInfo.email || data.gAuth.userInfo.name;
+  // 6. Handle Microsoft Account session
+  if (data.msAuth && data.msAuth.tokenInfo) {
+    let currentAuth = data.msAuth;
+    if (Date.now() > currentAuth.expirationTime) {
+      currentAuth = await refreshMicrosoftToken(currentAuth.tokenInfo.refresh_token);
+    }
+    if (currentAuth) {
+      user = currentAuth.userInfo.userPrincipalName || currentAuth.userInfo.displayName;
       print(`Welcome back, ${user}`, "success");
+    }
   }
   
   // 7. Handle Privacy Policy check
@@ -3724,7 +4196,23 @@ async function loadSettings() {
   // 8. Load and apply background settings
   const localData = await new Promise(resolve => chrome.storage.local.get('customBackground', resolve));
   applyTheme(promptTheme); // Apply theme loaded via getSetting
-  
+  const bgApiConfig = await getSetting('bgAPIConfig');
+if (!bgApiConfig) {
+    print("Applying default background API settings for the first time.", "info");
+    
+    const defaultConfig = {
+        endpoint: 'https://boringapi.com/api/v1/photos/random?num=1',
+        method: 'GET',
+        responsePath: 'photos.0.url',
+        headers: {},
+        params: {},
+        jsonBody: {}
+    };
+    
+    // 保存这套默认配置
+    await setSetting('bgAPIConfig', defaultConfig);
+    // 我们不需要设置API Key，因为它默认为空
+}
   if (data.imgAPI) promptBgRandomAPI = data.imgAPI;
   promptOpacity = data.background_opacity || 0.15;
   
@@ -3733,6 +4221,9 @@ async function loadSettings() {
   } else {
     applyBackground(null, promptOpacity); // Apply default background
   }
+
+  // Plugins
+  await loadAndInitPlugins();
 
   syntaxHighlightingEnabled = await getSetting('syntaxHighlighting') ?? false; // 如果未设置，则默认为 false
   bgUploadInput.addEventListener('change', handleFileSelect);
@@ -3943,6 +4434,20 @@ document.body.addEventListener("keydown", async e => {
 
   // if user input mode 
   if (input_mode) {
+    if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+        print(promptSymbol.textContent + buffer + "^C"); // 在当前行打印^C以示中断
+        print("Input cancelled.", "warning");
+        
+        user_input_content = ""; // 将结果设为null，以告知调用者操作已被取消
+        input_mode = false;        // 关闭输入模式，这将 resolve Promise
+        isPasswordMode = false;    // 同时确保退出密码模式
+        buffer = "";
+        cursorPosition = 0;
+        
+        done(); // 恢复正常的命令提示符
+        return; // 中断后续按键处理
+    }
+
     if (e.key === "Backspace") {
     e.preventDefault();
     if (cursorPosition > 0) {
@@ -3952,12 +4457,22 @@ document.body.addEventListener("keydown", async e => {
       cursorPosition--;
       typingIO_cursor();
       pauseBlinking();
-      updateInputDisplay();
+      // updateInputDisplay();
+      if (isPasswordMode) {
+        typedText.textContent = '';         // 1. 不显示任何字符
+        blockCursor.style.display = 'none'; // 2. 隐藏光标
+        return;
+      }
+      return;
     }
   } else if (e.key === "Enter") {
     clearSuggestions(); 
     e.preventDefault();
+    input_mode = false;
     user_input_content = buffer;
+    buffer = "";
+    cursorPosition = 0;
+    return;
 
   } else if (e.key.length === 1 && !control_cmd && !e.metaKey) { // Handles most printable characters
     clearSuggestions(); 
@@ -3968,7 +4483,14 @@ document.body.addEventListener("keydown", async e => {
     cursorPosition++;
     updateInputDisplay();
   }
-    return 
+  if (isPasswordMode) {
+        typedText.textContent = '';         // 1. 不显示任何字符
+        blockCursor.style.display = 'none'; // 2. 隐藏光标
+        return;
+    } else {
+        // updateInputDisplay(); // 对于普通输入模式，使用常规的显示更新
+    }
+    
   }
   
 
@@ -4177,7 +4699,6 @@ document.body.addEventListener("keydown", async e => {
     return;
   }
   
-  // --- FINAL FIX v5: Replace the entire 'if (e.key === "Tab")' block with this ---
 
 if (e.key === "Tab") {
     e.preventDefault();
@@ -4185,10 +4706,55 @@ if (e.key === "Tab") {
 
     const relevantInput = buffer.substring(0, cursorPosition);
     const parts = relevantInput.trimStart().split(/\s+/);
-    const commandName = parts[0] || "";
-    const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
 
-    // --- PRIORITY 1: Sub-command/Argument Completion ---
+
+    let commandName;
+    let commandArgs;
+    let isSudo = false;
+    let baseCommandParts; // 用于重建字符串
+
+    if (parts[0].toLowerCase() === 'sudo' && parts.length >= 2) {
+        isSudo = true;
+        commandName = parts[1] || "";
+        commandArgs = parts.slice(2);
+        baseCommandParts = parts.slice(0, 2); // e.g., ["sudo", "apt"]
+    } else {
+        commandName = parts[0] || "";
+        commandArgs = parts.slice(1);
+        baseCommandParts = parts.slice(0, 1); // e.g., ["apt"]
+    }
+
+    const commandDef = commands[commandName];
+    const isTypingFirstWord = (!isSudo && parts.length === 1 && !relevantInput.endsWith(' ')) || (isSudo && parts.length === 2 && !relevantInput.endsWith(' '));
+
+    // const commandName = parts[0] || "";
+    // const isTypingFirstWord = parts.length === 1 && !relevantInput.endsWith(' ');
+
+    if (!isTypingFirstWord && commandDef && typeof commandDef === 'object' && commandDef.suggestions) {
+        const suggestionResult = await commandDef.suggestions(commandArgs);
+        
+        if (suggestionResult && suggestionResult.length > 0) {
+            const argToComplete = relevantInput.endsWith(' ') ? "" : commandArgs[commandArgs.length - 1] || "";
+            const matches = suggestionResult.filter(s => s.toLowerCase().startsWith(argToComplete.toLowerCase()));
+
+            if (matches.length === 1) {
+                const completedArgs = [...commandArgs];
+                completedArgs[commandArgs.length - 1] = matches[0];
+                
+                const newText = baseCommandParts.join(' ') + " " + completedArgs.join(" ").trim() + " ";
+                buffer = newText + buffer.substring(cursorPosition);
+                cursorPosition = newText.length;
+                updateInputDisplay();
+
+            } else if (matches.length > 1) {
+                suggestionsContainer.textContent = matches.join("   ");
+                suggestionsContainer.style.display = "block";
+            }
+            return; // 参数补全已处理，退出
+        }
+    }
+
+
     // Check if we are typing arguments for a command that has a suggestion engine.
     if (!isTypingFirstWord) {
         const commandDef = commands[commandName];
@@ -4587,23 +5153,23 @@ function redrawAllLinesOnResize() {
 // Attach the new, intelligent redraw function to the window's resize event.
 window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
 
-window.onload = async () => {
+// window.onload = async () => {
 
-  terminal.addEventListener('dragstart', (e) => {
-    // 1. 阻止浏览器默认的拖拽行为
-    e.preventDefault();
-    // 2. 立刻清空当前的文字选择
-    // window.getSelection().removeAllRanges();
-  });
+//   terminal.addEventListener('dragstart', (e) => {
+//     // 1. 阻止浏览器默认的拖拽行为
+//     e.preventDefault();
+//     // 2. 立刻清空当前的文字选择
+//     // window.getSelection().removeAllRanges();
+//   });
 
-  // No explicit body focus, let browser decide or user click.
-  // typedText.focus() will be called by done() or click handler.
-  updateCharacterWidth(); // Initial calculation
-  await loadSettings(); // Load settings and user info
-  // welcomeMsg();
-  // updateInputDisplay(); // Called by done()
-  done(); // Initial setup of prompt and input display
-};
+//   // No explicit body focus, let browser decide or user click.
+//   // typedText.focus() will be called by done() or click handler.
+//   updateCharacterWidth(); // Initial calculation
+//   await loadSettings(); // Load settings and user info
+//   // welcomeMsg();
+//   // updateInputDisplay(); // Called by done()
+//   done(); // Initial setup of prompt and input display
+// };
 
 function detectBrowser() {
     var userAgent = navigator.userAgent;
@@ -4678,18 +5244,91 @@ function saveEnvironmentVars() {
   setSetting('environmentVars', environmentVars);
 }
 
-function applyBackground(imageDataUrl, opacity) {
-    if (imageDataUrl) {
-        backgroundContainer.style.backgroundImage = `url(${imageDataUrl})`;
-        backgroundContainer.style.opacity = opacity;
-        promptOpacity = opacity;
-    } else {
-        // Apply default background or clear it
-        // backgroundContainer.style.backgroundImage = `url('https://pic.re/image')`;
-        // backgroundContainer.style.backgroundImage = `url('https://rpic.origz.com/api.php?category=pixiv')`;
-        backgroundContainer.style.backgroundImage = `url('${promptBgRandomAPI}')`;
-        backgroundContainer.style.opacity = promptOpacity;
+/**
+ * A helper to safely get a nested value from an object using a dot-notation string.
+ * @param {object} obj The object to query.
+ * @param {string} path The dot-notation path (e.g., 'data.images[0].url').
+ * @returns The value, or undefined if not found.
+ */
+function getValueFromPath(obj, path) {
+    if (!path) return undefined;
+    return path.split(/[.\[\]]+/).filter(Boolean).reduce((o, k) => (o || {})[k], obj);
+}
+
+/**
+ * Fetches an image URL from the configured custom API.
+ * @returns {Promise<string|null>} The image URL or null if failed.
+ */
+async function fetchImageFromCustomAPI() {
+    const config = await getSetting('bgAPIConfig');
+    if (!config) return null;
+
+    try {
+        const apiKey = await getSetting('secret_bgAPIKey');
+        const url = new URL(config.endpoint);
+        
+        // 1. 添加 URL 参数
+        Object.entries(config.params).forEach(([key, value]) => {
+            url.searchParams.append(key, value);
+        });
+
+        // 2. 准备 fetch 选项
+        const fetchOptions = {
+            method: config.method,
+            headers: new Headers(config.headers || {}),
+        };
+
+        // 注入 API Key (如果存在) - 常见于 'Authorization' 头
+        if (apiKey && fetchOptions.headers.has('Authorization')) {
+            const authHeader = fetchOptions.headers.get('Authorization').replace('{api_key}', apiKey);
+            fetchOptions.headers.set('Authorization', authHeader);
+        }
+
+        if (config.method === 'POST') {
+            fetchOptions.headers.set('Content-Type', 'application/json');
+            fetchOptions.body = JSON.stringify(config.jsonBody);
+        }
+
+        // 3. 发起请求
+        const response = await fetch(url, fetchOptions);
+        if (!response.ok) {
+            throw new Error(`API responded with status ${response.status}`);
+        }
+        const data = await response.json();
+
+        // 4. 解析并返回图片链接
+        const imageUrl = getValueFromPath(data, config.responsePath);
+        if (typeof imageUrl !== 'string') {
+            throw new Error(`Image URL not found at path: ${config.responsePath}`);
+        }
+        return imageUrl;
+
+    } catch (e) {
+        print(`Custom API Error: ${e.message}`, 'error');
+        return null; // 返回 null 以便回退到默认背景
     }
+}
+
+
+async function applyBackground(imageDataUrl, opacity) {
+    let finalImageUrl = imageDataUrl;
+
+    if (!finalImageUrl) {
+        // 如果没有提供图片，则尝试从API获取
+        const customApiUrl = await fetchImageFromCustomAPI();
+        if (customApiUrl) {
+            finalImageUrl = customApiUrl;
+        } else {
+            // 如果自定义API失败或未配置，则使用默认的简单API
+            finalImageUrl = promptBgRandomAPI;
+        }
+    }
+
+    if (finalImageUrl) {
+        backgroundContainer.style.backgroundImage = `url(${finalImageUrl})`;
+        backgroundContainer.style.opacity = opacity;
+    }
+    promptOpacity = opacity;
 }
 
 function handleFileSelect(event) {
@@ -4888,3 +5527,58 @@ if (typeof exports !== "undefined") {
 } else {
     window.Ping = Ping;
 }
+
+async function main() {
+    // console.log("[Main] Page loaded. Starting main initialization function.");
+
+    // 1. 立即设置消息监听器
+    // 这是与沙箱相关的最先做的事情，确保万无一失。
+    window.addEventListener('message', (event) => {
+        // 安全检查：验证消息是否来自我们创建的那个特定的沙箱iframe。
+        if (!sandboxFrame || event.source !== sandboxFrame.contentWindow) {
+            return;
+        }
+
+        // console.log("[Main] SUCCESS: Received a message from the sandbox:", event.data);
+
+        const { type, name, commandString, text, style, allowHtml } = event.data;
+        switch (type) {
+          case 'print':
+            print(text, style, allowHtml);
+            break;
+          case 'plugin_command_registered':
+            pluginCommandNames.add(name);
+            // console.log(`[Main] Command '${name}' has been registered.`, pluginCommandNames);
+            break;
+          case 'execute_command':
+            executePipeline(commandString);
+            break;
+        }
+    });
+    // console.log("[Main] Message listener has been attached to window.");
+
+    // 2. 定义在沙箱加载后才执行的初始化逻辑
+    const initializeApp = async () => {
+        // console.log("[Main] Sandbox iframe has loaded. Running initializeApp().");
+        await loadSettings();
+        done();
+    };
+
+    // 3. 动态创建并附加沙箱 iframe
+    sandboxFrame = document.createElement('iframe');
+    sandboxFrame.id = 'sandbox-frame';
+    sandboxFrame.src = 'sandbox.html';
+    sandboxFrame.style.display = 'none';
+    sandboxFrame.onload = initializeApp; // 将初始化逻辑绑定到 iframe 的 load 事件
+    document.body.appendChild(sandboxFrame);
+    // console.log("[Main] Sandbox iframe has been created and appended to the body.");
+
+    // 4. 设置其他非依赖的监听器和初始状态
+    terminal.addEventListener('dragstart', (e) => e.preventDefault());
+    window.addEventListener('resize', debounce(redrawAllLinesOnResize, 100));
+    updateCharacterWidth();
+}
+
+// 使用 addEventListener 启动主函数
+// 这比 .onload 更健壮，因为它不会被其他脚本覆盖。
+window.addEventListener('load', main);

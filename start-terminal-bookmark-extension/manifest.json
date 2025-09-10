@@ -21,7 +21,17 @@
     "downloads.open",
     "search"],
   "host_permissions": [
-    "https://www.googleapis.com/*"
+    "https://www.googleapis.com/*",
+    "https://raw.githubusercontent.com/BradleyBao/Start-Terminal/main/start-terminal-bookmark-extension/plugins/*"
+  ],
+  "sandbox": {
+    "pages": ["sandbox.html"]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["sandbox.html"],
+      "matches": ["<all_urls>"]
+    }
   ],
   "oauth2": {
     "client_id": "627153522315-leuqgnns62umcui4qmhe5k4odapvionc.apps.googleusercontent.com",
