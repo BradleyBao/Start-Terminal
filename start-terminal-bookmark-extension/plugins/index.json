@@ -6,5 +6,9 @@
   "to": {
     "version": "1.0.0",
     "description": "A better goto"
+  },
+  "common_alias": {
+    "version": "1.1.0",
+    "description": "Common Aliases"
   }
 }
