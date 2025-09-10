@@ -1,41 +1,55 @@
 /**
- * common_aliases - Adds a set of convenient, widely-used aliases.
- * This plugin demonstrates how to register multiple simple alias commands in a loop.
+ * common_aliases - Adds a set of convenient, widely-used aliases to enhance productivity.
+ * This plugin provides shortcuts for file operations, navigation, system commands, and more.
  */
 (function() {
-    // Def common alias
+    // Common Names Definition 
     const aliases = {
-        // 'ls' shortcut
-        'l': 'ls -l',      // Long List 
-        'la': 'ls -a',     // Show all files
-        'll': 'ls -la',    // Show all long list files
+        // ls alises for directories 
+        // integrated ls supports -l and -a 
+        'l': 'ls',      // Normal ls
+        'la': 'ls -a',     // All Files 
+        'll': 'ls -la',    // Long List with All Files 
 
-        // directory
+        // cd aliases 
         '..': 'cd ..',
         '...': 'cd ../..',
         '....': 'cd ../../..',
 
-        // other shortcuts
-        'h': 'history',    // history 的缩写
-        'c': 'clear'       // clear 的缩写
+        // Configuration
+        'editrc': 'nano ~/.startrc', // Quick Edit .startrc
+        'sourcerc': 'source ~/.startrc', // Quick load .startrc
+
+        // Find names
+        'ff': 'find -name', // "Find File" shortcut, `ff "*query*"`
+
+        // Browsers Integrated 
+        'lt': 'tabs ls',      // "List Tabs", `tabs ls`
+        'dl': 'downloads ls', // "Downloads List", `downloads ls`
+        
+        // Common tools Aliases
+        'h': 'history',
+        'c': 'clear',
+        'n': 'nano',
+        'v': 'vim',
     };
 
-    // for loop to register aliases 
+    // Look through aliases and register 
     for (const name in aliases) {
         const command = aliases[name];
         
-        // register commands 
+        // Make sure it captured
         TerminalAPI.registerCommand(name, {
             exec: (function(cmd) {
                 return function(args) {
-                    return cmd + ' ' + args.join(' ');
+                    return cmd + ' ' + args.join(' ').trim();
                 }
             })(command),
             manual: `Alias for the command: "${command}"`
         });
     }
 
-    // Add an info 
-    TerminalAPI.print("Common Aliases plugin loaded", "success");
+    // 一个更具信息量的加载消息
+    TerminalAPI.print("Common Aliases plugin updated. ", "success");
 
 })();
