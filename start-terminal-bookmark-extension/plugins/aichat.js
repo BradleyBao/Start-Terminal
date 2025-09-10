@@ -5,9 +5,6 @@
  * All logic and configuration are self-contained within this plugin.
  */
 (function() {
-    if (!window.TerminalAPI) {
-        return;
-    }
 
     // --- Private Status, stored for only current session ---
     let sessionApiKey = null;
