@@ -10,5 +10,9 @@
   "common_alias": {
     "version": "1.1.0",
     "description": "Common Aliases"
-  }
+  },
+  "aichat": {
+    "version": "1.0.0",
+    "description": "An AI ChatBot"
+  },
 }
